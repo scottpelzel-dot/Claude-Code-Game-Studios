@@ -1,0 +1,5 @@
+3rd person above and behind	chase camera behind and above the ambulance, widening with speed (chaseCam)	evidence/play.png
+90s arcade	sunset gradient sky, huge low sun, flat-shaded blocks, palms, striped kerbs, neon strips, long shadows	evidence/play.png
+1 ambulance	the player drives the one ambulance, Medic 3	evidence/play.png
+grippy until you drift	high sideways grip, dropped while Space is held (config grip, drift_grip)	evidence/play.png
+grippy until you	high sideways grip until Space is held, then the tail slides (config grip, drift_grip; index.html drive())	evidence/play.png

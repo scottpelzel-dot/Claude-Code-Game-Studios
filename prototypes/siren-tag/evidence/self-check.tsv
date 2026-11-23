@@ -1,0 +1,58 @@
+time	2026-11-22 16:26:17
+keep	lines	0	pinned	0
+briefword	grippy until you	shown	evidence/play.png
+checklist	L1	pass	evidence/figures.png	Look: saturated 90s arcade at sunset. Purple-to-orange sky with a huge low sun at the end of the street, flat-shaded low-poly blocks, palm trees, red-and-white striped kerbs, neon sign strips, long shadows. Palette roles: white and red ambulance (player), red fire engine and dark police cruiser (rivals), yellow "IT" marker (threat), dark violet road, teal ground. Signature: the "IT" vehicle trails a flapping hospital gown and a glowing marker you can see across the district. Every figure drawn, no emoji, no plain circles.	sunset sky, low sun, flat-shaded blocks, palms, striped kerbs, neon strips, yellow IT marker, patient with gown on the IT vehicle
+checklist	L2	pass	evidence/play.png	References: the 90s arcade test shot the person picked; early-2000s open-world driving games for the roam-and-ram structure, none of their names, characters or maps.	built to the 90s arcade test shot; town, cast and map are original (evidence/nearest-game.txt)
+checklist	L3	pass	index.html:700	View: 3D · Camera: chase, above and behind the ambulance, widening with speed.	3D chase camera above and behind; field of view widens with speed
+checklist	F1	pass	index.html:525	Ambulance with grippy handling and an easy handbrake drift	grip 9 normally, 1.5 with Space held, recovering over drift_recover; feel itself is for the person's play
+checklist	F2	pass	index.html:604	Tag by ramming, with a no-tag-backs grace	a ram at tag_min_speed passes the patient; the old IT is immune for tagback_grace; play.png shows a tag landed
+checklist	F3	pass	evidence/figures.png	Two bot rivals, named as bots: a heavy fire engine and a quick police cruiser, each driving differently	fire engine (heavy, slow) and cruiser (light, quick) with their own stats in config.js, labelled (bot) on the HUD
+checklist	F4	pass	index.html:203	One small district: a grid of streets, a plaza and a couple of alley shortcuts	5 by 5 street grid, 16 blocks, a plaza with a fountain, one north-south and one east-west alley
+checklist	F5	pass	index.html:654	Three-round shift with a round clock, scoreboard and star rating	three rounds, round clock and scoreboard on play.png, star rating on the results screen
+checklist	F6	not_assessed	index.html:125	Engine note that climbs with speed, siren, crunchy ram hit	engine, siren and crunch are built with Web Audio; no check can hear them
+checklist	F7	pass	index.html:455	Civilian traffic that pulls over for sirens (thin stand-in) *(guessed)*	six civilian cars keep right round the grid and pull to the kerb within civ_pullover_range of a responder
+checklist	S1	pass	index.html:608	tag, chase and crash into others · in the slice	tag by collision, chase and crash, built for real
+checklist	S2	pass	index.html:392	bots · in the slice	bot driver: chases with routing and lead when IT, flees by junction when not
+checklist	S3	pass	index.html:455	civilian traffic · thin stand-in *(guessed)*	there and wired: civilians collide with everyone and yield to sirens
+checklist	M1	pass	index.html:507	You start in the ambulance at a junction in a small district of Port Calamity.	round 1 starts the ambulance at the junction (0,-60)
+checklist	M2	pass	index.html:521	A dispatcher line pops up: the fire engine has the patient.	dispatch line naming who has Mr. Crouch shows as the round starts
+checklist	M3	pass	index.html:507	Its yellow marker is two blocks away and coming for you.	Engine 9 starts IT 120 m up the same street, facing you
+checklist	M4	pass	evidence/play.png	You run, learn the handbrake by taking your first corner, and get rammed anyway.	the fire engine reached and rammed the ambulance in the scripted run; the handbrake is on Space
+checklist	M5	not_assessed	evidence/play.png	Now you're IT: the marker is over you, the bots scatter, and you chase the police cruiser down a straight and slam into it.	the marker moved to the player and the banner says ram someone; chasing the cruiser down needs a person driving
+checklist	M6	pass	index.html:608	The patient flies across and the hook has paid off.	on a tag the patient arcs from the old roof to the new one over 0.55 s
+checklist	C1	noevidence	config.js	Round one's bots are slow to turn and easy to catch.	round 1 bots use 78% speed and 65% steering and do not lead their aim
+checklist	C2	pass	index.html:407	By round three they cut corners, dodge at the last moment and gang up on the leader.	round 3: corner cutting by line of sight to the next junction, a last-moment jink, and the leader looks 45 m closer to an IT bot
+checklist	C3	pass	index.html:820	A lost round restarts that round, not the shift.	IT at the buzzer restarts that round; earlier rounds' totals are kept
+webgl	ANGLE (Google, Vulkan 1.3.0 (SwiftShader Device (Subzero) (0x0000C0DE)), SwiftShader driver)
+browser	HeadlessChrome/153.0.0.0
+console	play	1614	[.WebGL-0x37c4001ae400]GL Driver Message (OpenGL, Performance, GL_CLOSE_PATH_NV, High): GPU stall due to ReadPixels
+scene	play	0	title
+scene	play	1	play
+digits	log	18px "Arial Black", "Arial Bold", Impact, sans-serif	tabular	0
+digits	log	38px "Arial Black", "Arial Bold", Impact, sans-serif	tabular	0
+digits	log	14px "Arial Black", "Arial Bold", Impact, sans-serif	tabular	0
+digits	log	17px "Arial Black", "Arial Bold", Impact, sans-serif	tabular	0
+digits	log	20px "Arial Black", "Arial Bold", Impact, sans-serif	tabular	0
+digits	log	24px "Arial Black", "Arial Bold", Impact, sans-serif	tabular	0
+digits	log	96px "Arial Black", "Arial Bold", Impact, sans-serif	tabular	0
+measure	step-time	play	0.071	2.600	552
+lane	play	stop	9.2	1473
+console	play	0	[.WebGL-0x37c4001ae400]GL Driver Message (OpenGL, Performance, GL_CLOSE_PATH_NV, High): GPU stall due to ReadPixels
+console	play	0	[.WebGL-0x37c4001ae400]GL Driver Message (OpenGL, Performance, GL_CLOSE_PATH_NV, High): GPU stall due to ReadPixels (this message will no longer repeat)
+uncaught	play	0
+text	play	canvas	605,23,676,51	52.5	19.17	inside	1:03
+text	play	canvas	592,60,689,71	19.5	14.72	inside	ROUND 1 OF 3
+text	play	canvas	30,24,158,36	22.5	14.72	inside	SECONDS CLEAN
+text	play	canvas	61,50,162,67	24.0	14.72	inside	Medic 3 (you)
+text	play	canvas	262,51,286,64	24.0	19.17	inside	4.6
+text	play	canvas	61,78,166,95	24.0	19.17	inside	Engine 9 (bot)
+text	play	canvas	262,79,286,91	24.0	19.17	inside	2.2
+text	play	canvas	61,106,153,123	24.0	19.17	inside	Unit 12 (bot)
+text	play	canvas	262,107,286,120	24.0	19.17	inside	6.8
+text	play	canvas	441,615,836,637	42.0	10.19	inside	YOU'RE IT: RAM SOMEONE!
+text	play	canvas	446,665,835,685	28.5	21.00	inside	Mr. Crouch: "Is the siren strictly necessary?"
+text	play	canvas	436,103,844,123	28.5	19.17	inside	Dispatch: congratulations on your new patient.
+text	play	canvas	49,670,132,689	33.0	19.17	inside	26 km/h
+screen	play	drawn
+shot	play	prototypes/siren-tag/evidence/play.png
+responds	changed	184

@@ -1,0 +1,131 @@
+# The one-shot's small check (check-run/1).
+# Written by one-shot-check.sh --record: the results are /prototype's reading of
+# evidence/self-check.tsv; never edited by hand.
+kind: check-run/1
+engine: web
+browser: "HeadlessChrome/153.0.0.0"
+time: "2026-11-22 16:26:17"
+checks:
+  - id: boots
+    result: pass
+    evidence:
+      - "evidence/self-check.tsv"
+  - id: shot
+    result: pass
+    evidence:
+      - "evidence/play.png"
+  - id: outlines
+    result: pass
+    evidence:
+      - "evidence/figures.png"
+  - id: brief-words
+    result: pass
+    evidence:
+      - "evidence/brief-words.tsv"
+  - id: emoji
+    result: pass
+    evidence:
+      - "evidence/self-check.tsv"
+  - id: nearest-game
+    result: pass
+    evidence:
+      - "evidence/nearest-game.txt"
+brief_checklist:
+  - id: L1
+    result: pass
+    evidence: "evidence/figures.png"
+    item: "Look: saturated 90s arcade at sunset. Purple-to-orange sky with a huge low sun at the end of the street, flat-shaded low-poly blocks, palm trees, red-and-white striped kerbs, neon sign strips, long shadows. Palette roles: white and red ambulance (player), red fire engine and dark police cruiser (rivals), yellow \"IT\" marker (threat), dark violet road, teal ground. Signature: the \"IT\" vehicle trails a flapping hospital gown and a glowing marker you can see across the district. Every figure drawn, no emoji, no plain circles."
+  - id: L2
+    result: pass
+    evidence: "evidence/play.png"
+    item: "References: the 90s arcade test shot the person picked; early-2000s open-world driving games for the roam-and-ram structure, none of their names, characters or maps."
+  - id: L3
+    result: pass
+    evidence: "index.html:700"
+    item: "View: 3D · Camera: chase, above and behind the ambulance, widening with speed."
+  - id: F1
+    result: pass
+    evidence: "index.html:525"
+    item: "Ambulance with grippy handling and an easy handbrake drift"
+  - id: F2
+    result: pass
+    evidence: "index.html:604"
+    item: "Tag by ramming, with a no-tag-backs grace"
+  - id: F3
+    result: pass
+    evidence: "evidence/figures.png"
+    item: "Two bot rivals, named as bots: a heavy fire engine and a quick police cruiser, each driving differently"
+  - id: F4
+    result: pass
+    evidence: "index.html:203"
+    item: "One small district: a grid of streets, a plaza and a couple of alley shortcuts"
+  - id: F5
+    result: pass
+    evidence: "index.html:654"
+    item: "Three-round shift with a round clock, scoreboard and star rating"
+  - id: F6
+    result: not_run
+    mark: not assessed
+    why: "engine, siren and crunch are built with Web Audio; no check can hear them"
+    evidence: "index.html:125"
+    item: "Engine note that climbs with speed, siren, crunchy ram hit"
+  - id: F7
+    result: pass
+    evidence: "index.html:455"
+    item: "Civilian traffic that pulls over for sirens (thin stand-in) *(guessed)*"
+  - id: S1
+    result: pass
+    evidence: "index.html:608"
+    item: "tag, chase and crash into others · in the slice"
+  - id: S2
+    result: pass
+    evidence: "index.html:392"
+    item: "bots · in the slice"
+  - id: S3
+    result: pass
+    evidence: "index.html:455"
+    item: "civilian traffic · thin stand-in *(guessed)*"
+  - id: M1
+    result: pass
+    evidence: "index.html:507"
+    item: "You start in the ambulance at a junction in a small district of Port Calamity."
+  - id: M2
+    result: pass
+    evidence: "index.html:521"
+    item: "A dispatcher line pops up: the fire engine has the patient."
+  - id: M3
+    result: pass
+    evidence: "index.html:507"
+    item: "Its yellow marker is two blocks away and coming for you."
+  - id: M4
+    result: pass
+    evidence: "evidence/play.png"
+    item: "You run, learn the handbrake by taking your first corner, and get rammed anyway."
+  - id: M5
+    result: not_run
+    mark: not assessed
+    why: "the marker moved to the player and the banner says ram someone; chasing the cruiser down needs a person driving"
+    evidence: "evidence/play.png"
+    item: "Now you're IT: the marker is over you, the bots scatter, and you chase the police cruiser down a straight and slam into it."
+  - id: M6
+    result: pass
+    evidence: "index.html:608"
+    item: "The patient flies across and the hook has paid off."
+  - id: C1
+    result: pass
+    evidence: "config.js:55"
+    item: "Round one's bots are slow to turn and easy to catch."
+  - id: C2
+    result: pass
+    evidence: "index.html:407"
+    item: "By round three they cut corners, dodge at the last moment and gang up on the leader."
+  - id: C3
+    result: pass
+    evidence: "index.html:820"
+    item: "A lost round restarts that round, not the shift."
+measures:
+  - id: step-time
+    value: 2.600
+    unit: ms
+    by: browser
+    detail: "mean 0.071 ms, slowest 2.600 ms, 552 steps"

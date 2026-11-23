@@ -1,0 +1,22 @@
+L1	pass	evidence/figures.png	sunset sky, low sun, flat-shaded blocks, palms, striped kerbs, neon strips, yellow IT marker, patient with gown on the IT vehicle
+L2	pass	evidence/play.png	built to the 90s arcade test shot; town, cast and map are original (evidence/nearest-game.txt)
+L3	pass	index.html:700	3D chase camera above and behind; field of view widens with speed
+F1	pass	index.html:525	grip 9 normally, 1.5 with Space held, recovering over drift_recover; feel itself is for the person's play
+F2	pass	index.html:604	a ram at tag_min_speed passes the patient; the old IT is immune for tagback_grace; play.png shows a tag landed
+F3	pass	evidence/figures.png	fire engine (heavy, slow) and cruiser (light, quick) with their own stats in config.js, labelled (bot) on the HUD
+F4	pass	index.html:203	5 by 5 street grid, 16 blocks, a plaza with a fountain, one north-south and one east-west alley
+F5	pass	index.html:654	three rounds, round clock and scoreboard on play.png, star rating on the results screen
+F6	not_assessed	index.html:125	engine, siren and crunch are built with Web Audio; no check can hear them
+F7	pass	index.html:455	six civilian cars keep right round the grid and pull to the kerb within civ_pullover_range of a responder
+S1	pass	index.html:608	tag by collision, chase and crash, built for real
+S2	pass	index.html:392	bot driver: chases with routing and lead when IT, flees by junction when not
+S3	pass	index.html:455	there and wired: civilians collide with everyone and yield to sirens
+M1	pass	index.html:507	round 1 starts the ambulance at the junction (0,-60)
+M2	pass	index.html:521	dispatch line naming who has Mr. Crouch shows as the round starts
+M3	pass	index.html:507	Engine 9 starts IT 120 m up the same street, facing you
+M4	pass	evidence/play.png	the fire engine reached and rammed the ambulance in the scripted run; the handbrake is on Space
+M5	not_assessed	evidence/play.png	the marker moved to the player and the banner says ram someone; chasing the cruiser down needs a person driving
+M6	pass	index.html:608	on a tag the patient arcs from the old roof to the new one over 0.55 s
+C1	pass	config.js:55	round 1 bots use 78% speed and 65% steering and do not lead their aim
+C2	pass	index.html:407	round 3: corner cutting by line of sight to the next junction, a last-moment jink, and the leader looks 45 m closer to an IT bot
+C3	pass	index.html:820	IT at the buzzer restarts that round; earlier rounds' totals are kept
