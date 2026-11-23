@@ -1,0 +1,8 @@
+{
+  "name": "crash-out-houston-edition",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Crash Out: Houston Edition. The game page and its room server. No dependencies.",
+  "scripts": { "start": "node server.js" },
+  "engines": { "node": ">=18" }
+}

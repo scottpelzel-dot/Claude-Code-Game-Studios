@@ -31,6 +31,7 @@ After play: "Home Screen isn't formatted correctly. I can't even hit the right b
 After play: "Why isn't full screen"
 After play: "It's fun!  Now level up the graphics and make a way to get health in battle royal"
 After play: "Game freezes when I try to make a room"
+After play: "i do want anyone to play this game eventually. so lets do a public if possible"
 
 **Pitch:** Vehicle tag between rival emergency crews: whoever is stuck with the town's most insufferable patient is "IT", and the only way to get rid of him is to ram him into someone else's vehicle. *(guessed: the patient as the tag)*
 
@@ -117,7 +118,7 @@ The bots are a real fight from round one: they drive at nearly full speed, aim a
 - No existing game's names, characters, map, art or collectibles
 
 ## Out of scope
-- Online play over the internet: the room server exists and runs on one computer's network; friends on cellular need it hosted somewhere public, which is a decision still to make
+- Online play over the internet: set up for Render (`render.yaml`), one web service that serves the game and runs the rooms; it goes live when the owner connects the repository there. The free plan carries about two rooms at once
 - Rooms for Battle Royale, and more than two people to a room: add it as a feature
 - Split-screen tag with a friend on one machine: change it after play
 - Combat Racing and Campaign, in that order (`design/crash-out-roadmap.md`): add it as a feature

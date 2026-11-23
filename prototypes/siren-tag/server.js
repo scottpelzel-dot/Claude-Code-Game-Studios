@@ -20,6 +20,7 @@ const DIR = __dirname, PORT = Number(process.env.PORT) || 8787, TEST = process.a
 const HOLD = 20;          // seconds a dropped player's seat is held, braked, before a bot drives it
 const SILENT = 4;         // seconds without a word from a browser before it counts as dropped
 const MAX_PLAYERS = 2;    // this first version: two people to a room
+const MAX_ROOMS = Number(process.env.MAX_ROOMS) || 12;   // each running room costs processor time: a small host can only carry a few
 const SNAP_EVERY = 3;     // simulation steps between snapshots: 60 / 3 = 20 a second
 const STEP = 1 / 60;
 const FILES = { '/': 'index.html', '/index.html': 'index.html', '/config.js': 'config.js', '/vendor/three.js': 'vendor/three.js' };
@@ -119,7 +120,11 @@ function startShift(room) {
   log(room, `shift ${room.shift} started: seats ${room.roles.join(',')} people in ${humans.join(',')}`); tellRoom(room);
 }
 function onMessage(conn, m) {
-  if (m.t === 'create') { if (conn.player) return; const room = createRoom(conn); log(room, 'created'); return; }
+  if (m.t === 'create') {
+    if (conn.player) return;
+    if (rooms.size >= MAX_ROOMS) return conn.send(JSON.stringify({ t: 'err', msg: 'The server is full: every room is in use. Try again in a few minutes.', fatal: true }));
+    const room = createRoom(conn); log(room, 'created'); return;
+  }
   if (m.t === 'join') { if (conn.player) return; return joinRoom(conn, m.room, m.token); }
   const p = conn.player, room = conn.room; if (!p || !room) return;
   p.lastSeen = Date.now();
@@ -132,8 +137,9 @@ function onMessage(conn, m) {
   else if (m.t === 'leave') { conn.player = null; removePlayer(room, p); conn.close(); }
   else if (m.t === 'test' && TEST && room.sim) { try { vm.runInContext(String(m.js), room.sim.ctx); } catch (e) { send(p, { t: 'err', msg: 'test: ' + e.message }); } }
 }
+let lagging = 0;         // rooms that could not keep up with real time on the last pass: the host is too small for the load
 function stepRooms() {
-  const now = performance.now(), wall = Date.now();
+  const now = performance.now(), wall = Date.now(); let slow = 0;
   for (const room of rooms.values()) {
     // dropped browsers, held seats, empty rooms
     for (const p of room.players) {
@@ -142,7 +148,8 @@ function stepRooms() {
     }
     if (room.players.some(p => p.on)) room.emptySince = 0; else { room.emptySince = room.emptySince || wall; if (wall - room.emptySince > 5 * 60 * 1000) { rooms.delete(room.code); log(room, 'closed: empty for five minutes'); continue; } }
     if (room.phase === 'lobby' || !room.sim) { room.last = now; continue; }
-    room.acc += Math.min((now - room.last) / 1000, 0.25); room.last = now;
+    const gap = (now - room.last) / 1000; if (gap > 0.25) slow++;
+    room.acc += Math.min(gap, 0.25); room.last = now;
     while (room.acc >= STEP) {
       room.acc -= STEP;
       room.sim.game.step(1, false); room.sim.game.net.hostTick(); room.tick++;
@@ -156,6 +163,7 @@ function stepRooms() {
       if (phase !== room.phase) { room.phase = phase; if (phase === 'results') log(room, `shift ${room.shift} over: ${snap.tot.map(Math.round).join(' ')}`); tellRoom(room); }
     }
   }
+  lagging = slow;
 }
 const log = (room, what) => console.log(`[${new Date().toISOString().slice(11, 19)}] room ${room.code}: ${what}`);
 
@@ -199,7 +207,7 @@ function acceptSocket(req, socket) {
 // ---- HTTP: the game's files, and a health check --------------------------------------------
 const server = http.createServer((req, res) => {
   const url = req.url.split('?')[0];
-  if (url === '/health') { res.writeHead(200, { 'content-type': 'application/json' }); res.end(JSON.stringify({ ok: true, rooms: rooms.size, players: [...rooms.values()].reduce((a, r) => a + r.players.filter(p => p.on).length, 0) })); return; }
+  if (url === '/health') { res.writeHead(200, { 'content-type': 'application/json' }); res.end(JSON.stringify({ ok: true, rooms: rooms.size, maxRooms: MAX_ROOMS, behind: lagging, players: [...rooms.values()].reduce((a, r) => a + r.players.filter(p => p.on).length, 0) })); return; }
   const file = FILES[url];
   if (!file) { res.writeHead(404, { 'content-type': 'text/plain' }); res.end('Not found'); return; }
   fs.readFile(path.join(DIR, file), (err, data) => {
