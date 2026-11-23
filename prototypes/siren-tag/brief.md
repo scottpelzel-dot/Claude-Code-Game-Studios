@@ -30,6 +30,7 @@ After play: "Build the first playable multiplayer version of Crash Out: Houston 
 After play: "Home Screen isn't formatted correctly. I can't even hit the right buttons"
 After play: "Why isn't full screen"
 After play: "It's fun!  Now level up the graphics and make a way to get health in battle royal"
+After play: "Game freezes when I try to make a room"
 
 **Pitch:** Vehicle tag between rival emergency crews: whoever is stuck with the town's most insufferable patient is "IT", and the only way to get rid of him is to ram him into someone else's vehicle. *(guessed: the patient as the tag)*
 

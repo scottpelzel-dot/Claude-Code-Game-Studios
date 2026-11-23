@@ -1467,19 +1467,25 @@ function hostDriver(v) { // on the server: a person's seat takes that person's l
   if (NET.away[v.i]) return { throttle: 0, steer: 0, hand: true, fire: false };
   return NET.inputs[v.i] || { throttle: 0, steer: 0, hand: false, fire: false };
 }
+const NO_SERVER = 'Rooms need the game server, and this page has none. Solo Play works here; for rooms, run server.js and open its address.';
 const netToken = code => { try { return localStorage.getItem('crashout:' + code) || ''; } catch (e) { return ''; } };
 const netLink = () => ((/^(localhost|127\.|\[::1\])/.test(location.hostname) && net.lan[0]) ? net.lan[0] : location.origin) + '/?room=' + net.code;   // a link another device can open
 function netSend(o) { if (net.ws && net.ws.readyState === 1) net.ws.send(JSON.stringify(o)); }
 function netOpen(first) {
   if (!/^http/.test(location.protocol) || typeof WebSocket === 'undefined') { net.err = 'Multiplayer needs the game server: run server.js and open the address it prints.'; return; }
-  net.left = false; if (net.status !== 'lost') net.status = 'connecting'; let opened = false;
-  const ws = new WebSocket((location.protocol === 'https:' ? 'wss://' : 'ws://') + location.host + '/ws'); net.ws = ws;
+  net.left = false; if (net.status !== 'lost') net.status = 'connecting'; let opened = false, ws;
+  // Some pages forbid the connection outright (the Claude preview does), and some browsers refuse by
+  // throwing, not by failing quietly. Either way: say so on the title screen and carry on.
+  try { ws = new WebSocket((location.protocol === 'https:' ? 'wss://' : 'ws://') + location.host + '/ws'); }
+  catch (e) { net.ws = null; if (net.code) { net.status = 'lost'; net.retry = 3; } else { net.status = 'off'; net.err = NO_SERVER; if (scene === 'join' || scene === 'lobby') scene = 'title'; } return; }
+  net.ws = ws;
+  setTimeout(() => { if (!opened && net.ws === ws) { try { ws.close(); } catch (e) { /* already gone */ } if (net.ws === ws) ws.onclose(); } }, 6000);   // no answer in six seconds is no server
   ws.onopen = () => { opened = true; ws.send(JSON.stringify(first)); };
   ws.onmessage = e => { let m; try { m = JSON.parse(e.data); } catch (x) { return; } netMsg(m); };
   ws.onclose = () => {
     if (net.ws !== ws) return; net.ws = null;
     if (net.left) { net.status = 'off'; return; }
-    if (!net.code) { net.status = 'off'; net.err = opened ? 'The server closed the connection.' : 'No game server answered at this address.'; if (scene === 'join' || scene === 'lobby') scene = 'title'; return; }
+    if (!net.code) { net.status = 'off'; net.err = opened ? 'The server closed the connection.' : NO_SERVER; if (scene === 'join' || scene === 'lobby') scene = 'title'; return; }
     net.status = 'lost'; net.retry = 1;                      // in a room: keep trying to get back to the seat
   };
 }
@@ -1785,10 +1791,14 @@ function tick() {
   drawFrame();
 }
 function drawFrame() { scenes[scene].draw(); }
-function frame() { tick(); requestAnimationFrame(frame); }
+let lastFault = '';
+function frame() { // one bad step must never stop the game: note it, drop the pending presses, carry on
+  try { tick(); } catch (e) { hit.clear(); if (String(e) !== lastFault) { lastFault = String(e); console.error(e); } }
+  requestAnimationFrame(frame);
+}
 // A headless browser on a time budget runs timers but almost no animation frames: a timer
 // ticks when no frame has come for 100 ms on a visible page; a hidden tab stays paused.
-function timer() { if (document.visibilityState === 'visible' && clock.now() - last > 0.1) tick(); }
+function timer() { if (document.visibilityState === 'visible' && clock.now() - last > 0.1) { try { tick(); } catch (e) { hit.clear(); } } }
 
 // ---- What a check can read and drive (?manual=1 stops the loop; players never see it) ----
 window.game = {
