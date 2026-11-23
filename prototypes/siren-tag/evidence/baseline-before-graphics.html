@@ -1,0 +1,1753 @@
+<!doctype html>
+<!-- PROTOTYPE - NOT FOR PRODUCTION -->
+<!-- Question: Is chasing and ramming bots in a game of tag fun for ten minutes? -->
+<!-- Date: 2026-11-22 -->
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<title>Crash Out: Houston Edition</title>
+<style>
+  :root { --sal: env(safe-area-inset-left, 0px); --sar: env(safe-area-inset-right, 0px); }
+  html { box-sizing: border-box; }
+  html, body { margin: 0; height: 100%; background: #000; overflow: hidden; touch-action: none; user-select: none; -webkit-user-select: none; }
+  body { font-variant-numeric: tabular-nums; }
+  #wrap { position: relative; margin: 0 auto; }
+  canvas { display: block; position: absolute; left: 0; top: 0; }
+  #hudbox { position: absolute; pointer-events: none; }
+  #hudbox input { pointer-events: auto; position: absolute; box-sizing: border-box; display: none; text-align: center; font: 700 18px Arial, sans-serif; border: 3px solid #ffe14a; border-radius: 6px;
+    background: #1a1a6e; color: #fff; user-select: text; -webkit-user-select: text; touch-action: auto; }
+  #invite { left: 20%; top: 27.2%; width: 52%; height: 6.6%; }
+  #roomcode { left: 37%; top: 43%; width: 26%; height: 13%; text-transform: uppercase; letter-spacing: 0.2em; }
+</style>
+</head>
+<body>
+<div id="wrap"><canvas id="gl"></canvas><canvas id="game"></canvas>
+<div id="hudbox"><input id="invite" readonly aria-label="Invite link"><input id="roomcode" maxlength="4" autocapitalize="characters" autocomplete="off" spellcheck="false" aria-label="Room code"></div></div>
+<script src="vendor/three.js"></script>
+<script src="config.js"></script>
+<script>
+'use strict';
+// ---- Built to be checked ----------------------------------------------------------------
+const params = new URLSearchParams(location.search);
+const tune = new Proxy({}, { get: (_, k) => CONFIG[k].value }); // live: tune.speed is CONFIG.speed.value
+const STEP = 1 / 60;            // simulation step in seconds; motion is per second, never per frame
+const W = 1280, H = 720;        // logical size of the HUD
+const FONT = '"Arial Black", "Arial Bold", Impact, sans-serif';
+const TITLE = 'Crash Out', EDITION = 'Houston Edition';
+const CONTROLS = ['W / Up: accelerate    S / Down: brake, reverse    A D / Left Right: steer', 'Space: handbrake drift    R: back on the road    P: pause    M: mute'];
+const TOUCH_CONTROLS = ['Hold the phone sideways. Left thumb pad: push forward to go,', 'back to brake and reverse, sideways to steer. Right thumb: DRIFT.'];
+const BR_CONTROLS = ['W / Up: accelerate    S / Down: brake, reverse    A D / Left Right: steer', 'F or K: fire    Space: handbrake drift    R: back on the road    P: pause    M: mute'];
+const BR_TOUCH_CONTROLS = ['Hold the phone sideways. Left thumb pad drives.', 'Right thumb: FIRE, with DRIFT beside it.'];
+const clock = window.GAME_CLOCK || { now: () => performance.now() / 1000 }; // a check may inject one
+const CHEAP = params.get('render') === 'cheap'; // a headless shot or check: 3D draws cheap; players never see it
+let seed;
+function rng() { // mulberry32; every gameplay random call reads this, never Math.random
+  seed = (seed + 0x6D2B79F5) | 0;
+  let t = Math.imul(seed ^ (seed >>> 15), seed | 1);
+  t ^= t + Math.imul(t ^ (t >>> 7), t | 61);
+  return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+}
+const events = []; // window.game.events: anything the game wants a run to see
+const sounds = { tones: 0, crunches: 0 }; // sound events that reached a live audio context: fired, not heard
+
+// ---- Screen: a WebGL canvas for the town, a 2D canvas over it for the HUD -----------------
+const wrap = document.getElementById('wrap');
+const canvas = document.getElementById('game');
+const ctx = canvas.getContext('2d');
+const renderer = new THREE.WebGLRenderer({ canvas: document.getElementById('gl'), antialias: !CHEAP });
+renderer.shadowMap.enabled = !CHEAP; renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+let viewW = W; // the HUD's width on screen, in CSS pixels: a narrow one gets the phone HUD
+let SCALE = 1, EX = 0, EY = 0, camReady = false, SAFE_L = 0, SAFE_R = 0;
+const edgeShift = safe => Math.max(0, Math.min(EX * 0.7, EX - safe / SCALE - 6));   // how far a thumb control moves out towards the edge of a wide screen
+function fit() { // fills the window at any size and pixel ratio
+  // The room actually on offer: the visible window, less any padding the host page keeps clear for
+  // its own bars (a phone's safe areas, an app's close and share buttons).
+  let availW = innerWidth, availH = innerHeight;
+  if (typeof getComputedStyle === 'function') {
+    const vv = window.visualViewport, root = getComputedStyle(document.documentElement), body = getComputedStyle(document.body), px = (st, k) => parseFloat(st[k]) || 0;
+    if (vv) { availW = Math.min(availW, vv.width); availH = Math.min(availH, vv.height); }
+    availW -= px(root, 'paddingLeft') + px(root, 'paddingRight') + px(body, 'paddingLeft') + px(body, 'paddingRight');
+    SAFE_L = parseFloat(root.getPropertyValue('--sal')) || 0; SAFE_R = parseFloat(root.getPropertyValue('--sar')) || 0;   // a notch or a rounded corner: the picture may run under it, the controls may not
+    availH -= px(root, 'paddingTop') + px(root, 'paddingBottom') + px(body, 'paddingTop') + px(body, 'paddingBottom');
+  }
+  const s = Math.max(0.1, Math.min(availW / W, availH / H));
+  const r = s * (devicePixelRatio || 1);
+  // The town is drawn across the whole of that room, edge to edge. The HUD keeps its 16:9 layout,
+  // centred, with EX and EY logical units of spare view either side of it.
+  const aw = Math.max(1, Math.floor(availW)), ah = Math.max(1, Math.floor(availH)), ox = (aw - W * s) / 2, oy = (ah - H * s) / 2, dpr = devicePixelRatio || 1;
+  SCALE = s; EX = ox / s; EY = oy / s; viewW = W * s;
+  canvas.width = Math.round(aw * dpr); canvas.height = Math.round(ah * dpr);
+  canvas.style.width = aw + 'px'; canvas.style.height = ah + 'px';
+  wrap.style.width = aw + 'px'; wrap.style.height = ah + 'px'; wrap.style.marginTop = '0px';
+  const hb = document.getElementById('hudbox').style; hb.left = ox + 'px'; hb.top = oy + 'px'; hb.width = W * s + 'px'; hb.height = H * s + 'px';
+  ctx.setTransform(r, 0, 0, r, ox * dpr, oy * dpr);
+  renderer.setPixelRatio(CHEAP ? 0.5 : Math.min(dpr, 2));
+  renderer.setSize(aw, ah, true);
+  if (camReady) { cam.aspect = aw / ah; cam.updateProjectionMatrix(); }
+  document.getElementById('invite').style.fontSize = 17 * s + 'px'; document.getElementById('roomcode').style.fontSize = 52 * s + 'px';
+}
+function text(s, x, y, size, c, align = 'center') {
+  ctx.fillStyle = c; ctx.font = `${size}px ${FONT}`; ctx.textAlign = align;
+  ctx.textBaseline = 'middle'; ctx.fillText(s, x, y);
+}
+function panel(x, y, w, h, c = 'rgba(20,12,48,0.82)') { ctx.fillStyle = c; ctx.fillRect(x, y, w, h); }
+const clamp = (v, a, b) => v < a ? a : v > b ? b : v;
+const lerp = (a, b, t) => a + (b - a) * t;
+const wrapA = a => { while (a > Math.PI) a -= 2 * Math.PI; while (a < -Math.PI) a += 2 * Math.PI; return a; };
+
+// ---- Input: keys by position (event.code), OS key repeat ignored ------------------------
+const down = new Set(), hit = new Set();
+const pressed = code => hit.has(code); // true for one step after the key goes down
+addEventListener('keydown', e => {
+  startAudio(); touch.on = false;
+  if (!e.repeat) { down.add(e.code); hit.add(e.code); }
+  if ((e.code === 'Space' || e.code.startsWith('Arrow')) && !(e.target && e.target.tagName === 'INPUT')) e.preventDefault();
+});
+addEventListener('keyup', e => down.delete(e.code));
+addEventListener('pointerdown', e => { // a click or a tap works wherever Enter does; on the title it can pick a rig first
+  startAudio();
+  if (scene === 'title' && titleTap(...toLogical(e))) return;
+  if (scene === 'brResults') { resultTap(...toLogical(e)); return; }
+  if (scene === 'lobby') { lobbyTap(...toLogical(e)); return; }
+  if (scene === 'join') { if (e.target && e.target.id === 'roomcode') return; joinTap(...toLogical(e)); return; }
+  if (scene === 'between' || scene === 'over' || scene === 'results' || scene === 'pause') hit.add('Enter');
+});
+addEventListener('blur', () => down.clear());
+
+// ---- Touch: on a phone, the left thumb works a full directional pad (forward to go, back to
+// brake and reverse, sideways to steer), with buttons to drift, reset and pause. Turned on by the first touch.
+const touch = { on: false, coarse: !!(window.matchMedia && matchMedia('(pointer: coarse)').matches), steerId: null, x0: 0, y0: 0, x: 0, y: 0, held: new Map() };
+const PAD = { x: 170, y: H - 150 };   // where the pad rests; it moves under the thumb when touched
+const BTN_TAG = {
+  drift: { x: W - 130, y: H - 140, r: 76, label: 'DRIFT' },
+  pause: { x: W - 150, y: 232, r: 34, label: 'PAUSE' }, reset: { x: W - 66, y: 232, r: 34, label: 'RESET' },
+};
+const BTN_BR = { // FIRE sits under the right thumb, DRIFT beside it
+  fire: { x: W - 124, y: H - 140, r: 80, label: 'FIRE' }, drift: { x: W - 300, y: H - 84, r: 56, label: 'DRIFT' },
+  pause: BTN_TAG.pause, reset: BTN_TAG.reset,
+};
+const btns = () => { const src = MODE === 'br' ? BTN_BR : BTN_TAG, out = {}; for (const k in src) out[k] = { ...src[k], x: src[k].x + edgeShift(SAFE_R) }; return out; };   // out towards the real edge of a wide screen
+const touchHeld = k => { for (const v of touch.held.values()) if (v === k) return true; return false; };
+function toLogical(e) { const r = canvas.getBoundingClientRect(); return [(e.clientX - r.left) / SCALE - EX, (e.clientY - r.top) / SCALE - EY]; }
+addEventListener('pointerdown', e => {
+  if (e.pointerType !== 'touch') return;
+  touch.on = true; if (scene !== 'play') return;
+  const [x, y] = toLogical(e);
+  for (const k in btns()) { const b = btns()[k]; if (Math.hypot(x - b.x, y - b.y) < b.r * 1.25) { touch.held.set(e.pointerId, k); if (k === 'reset') hit.add('KeyR'); if (k === 'pause') hit.add('KeyP'); return; } }
+  if (x < W * 0.5 && touch.steerId === null) { touch.steerId = e.pointerId; touch.x0 = touch.x = x; touch.y0 = touch.y = clamp(y, 260, H - 110); }
+});
+addEventListener('pointermove', e => { if (e.pointerId === touch.steerId) [touch.x, touch.y] = toLogical(e); });
+for (const type of ['pointerup', 'pointercancel']) addEventListener(type, e => { if (e.pointerId === touch.steerId) touch.steerId = null; touch.held.delete(e.pointerId); });
+addEventListener('touchmove', e => { if (!(e.target && e.target.tagName === 'INPUT')) e.preventDefault(); }, { passive: false }); // no scrolling or pull-to-refresh under the thumbs
+
+// ---- Audio: started on first input, mute on M --------------------------------------------
+let audio = null, muted = false, snd = null;
+function startAudio() {
+  if (!audio) {
+    const ac = window.GAME_AUDIO || new (window.AudioContext || window.webkitAudioContext)(); // a check may inject one
+    const out = ac.createGain(); out.gain.value = muted ? 0 : tune.volume;
+    out.connect(ac.destination); audio = { ac, out };
+  }
+  if (audio.ac.state === 'suspended') audio.ac.resume();
+}
+function setMuted(m) { muted = m; if (audio) audio.out.gain.value = m ? 0 : tune.volume; }
+addEventListener('tune', () => setMuted(muted));
+function tone(freq, dur, type = 'square', vol = 0.3, slideTo = 0) {
+  if (!audio || muted) return;
+  try {
+    const t = audio.ac.currentTime, o = audio.ac.createOscillator(), g = audio.ac.createGain();
+    o.type = type; o.frequency.setValueAtTime(freq, t);
+    if (slideTo) o.frequency.exponentialRampToValueAtTime(slideTo, t + dur);
+    g.gain.setValueAtTime(vol, t); g.gain.exponentialRampToValueAtTime(0.001, t + dur);
+    o.connect(g).connect(audio.out); o.start(t); o.stop(t + dur); sounds.tones++;
+  } catch (e) { /* a stand-in audio context in a check */ }
+}
+function initSound() { // the engine drone, the siren and a noise buffer for crunches
+  snd = { dead: true };
+  try {
+    const ac = audio.ac;
+    const eng = ac.createOscillator(), ef = ac.createBiquadFilter(), eg = ac.createGain();
+    eng.type = 'sawtooth'; ef.type = 'lowpass'; ef.frequency.value = 420; eg.gain.value = 0;
+    eng.connect(ef).connect(eg).connect(audio.out); eng.start();
+    const sir = ac.createOscillator(), sg = ac.createGain();
+    sir.type = 'triangle'; sg.gain.value = 0; sir.connect(sg).connect(audio.out); sir.start();
+    const buf = ac.createBuffer(1, ac.sampleRate * 0.5, ac.sampleRate), d = buf.getChannelData(0);
+    let s = 1234567; for (let i = 0; i < d.length; i++) { s = (s * 16807) % 2147483647; d[i] = (s / 1073741824 - 1) * (1 - i / d.length); }
+    snd = { eng, ef, eg, sir, sg, buf };
+  } catch (e) { /* no sound: the game still plays */ }
+}
+function crunch(power) { // power 0..1
+  if (!snd || snd.dead || muted) return;
+  try {
+    const ac = audio.ac, t = ac.currentTime, n = ac.createBufferSource(), f = ac.createBiquadFilter(), g = ac.createGain();
+    n.buffer = snd.buf; f.type = 'lowpass'; f.frequency.value = 500 + power * 2600;
+    g.gain.setValueAtTime(0.25 + power * 0.6, t); g.gain.exponentialRampToValueAtTime(0.001, t + 0.18 + power * 0.25);
+    n.connect(f).connect(g).connect(audio.out); n.start(t); sounds.crunches++;
+    tone(90 - power * 30, 0.2 + power * 0.15, 'sine', 0.3 + power * 0.4, 40);
+  } catch (e) { /* ignore */ }
+}
+function soundStep() {
+  if (audio && !snd) initSound();
+  if (!snd || snd.dead) return;
+  try {
+    const t = audio.ac.currentTime, playing = scene === 'play' && state.phase === 'run';
+    const p = state.vehicles[ME], sp = Math.hypot(p.vx, p.vz);
+    snd.eng.frequency.setTargetAtTime(48 + sp * 4.6 + (p.drift ? -14 : 0), t, 0.05);   // climbs with speed, drops in a slide
+    snd.ef.frequency.setTargetAtTime(380 + sp * 40, t, 0.05);
+    snd.eg.gain.setTargetAtTime(playing ? 0.07 + 0.06 * Math.abs(p.inp.throttle) : 0, t, 0.08);
+    const it = state.vehicles[state.it];
+    let vol = 0, f = 700;
+    if (playing && it) {
+      if (state.it === ME) { f = (state.t * 2.2) % 1 < 0.5 ? 660 : 880; vol = 0.035; }       // your own two-tone
+      else { f = 760 + 260 * Math.sin(state.t * 5.2); vol = 0.16 * Math.max(0, 1 - Math.hypot(it.x - p.x, it.z - p.z) / 130); } // IT's wail gets louder as it closes
+    }
+    snd.sir.frequency.setTargetAtTime(f, t, 0.03); snd.sg.gain.setTargetAtTime(vol, t, 0.1);
+  } catch (e) { /* ignore */ }
+}
+
+// =========================================================================================
+// THE TOWN: one district of an arcade Houston (not the real map). A grid of streets with open
+// grass lots, then a bayou along the north side, and downtown's skyline on the far bank.
+// North is +z. Two ways over the bayou: the paved bridge at x = 0, and a dirt ramp down the
+// bank to a low-water crossing at x = 60. Trails run along both banks and under the bridge.
+// =========================================================================================
+const ROAD = 16, PITCH = 60, BLOCK = PITCH - ROAD;        // metres
+const NODES = [-120, -60, 0, 60, 120];                    // street centre lines, west to east
+const NODES_Z = [-120, -60, 0, 60, 120, 180];             // south to north; the last is downtown's street
+const BCEN = [-90, -30, 30, 90];                          // block centres
+const EDGE = 131, NORTH = 192;                            // the sea wall, and the foot of the skyline
+const CH = { z0: 130, z1: 170, slope: 9, depth: 4.5, w0: 146, w1: 154, fordX: 60, fordW: 10, bridgeW: 8 }; // the bayou's channel
+const walls = [];                                         // {x0,x1,z0,z1}: what vehicles bounce off
+const posts = [];                                         // {x,z,r}: round things to bounce off
+const deckWalls = [], lowWalls = [];                      // the bridge rails (on the bridge) and its abutments (down on the bank)
+const PLAZA = { x: 30, z: 30 }, GRASS = 0x19c98c, POND = 0x00d2ff, DIRT = 0xc98b4a, GRAVEL = 0xe0cfa0, WATER = 0x1fa8e8, CONCRETE = 0x8a7fb0;
+const PAL = {
+  sky: [[0, '#1a1a6e'], [0.35, '#7a2bbf'], [0.6, '#ff3d8b'], [0.8, '#ff9a3d'], [1, '#ffe66b']],
+  fog: 0xff7a6b, ground: 0x12b89a, road: 0x3a3158, line: 0xffe14a, kerbA: 0xff2e63, kerbB: 0xffffff, walk: 0xe9b872,
+  bld: [0xff5e3a, 0x00d2ff, 0xffd400, 0xff2e93, 0x7dff5a, 0xf2f2ff, 0xff9a3d], roof: [0x24204a, 0x3a1f5c],
+  win: 0x1b2a6b, neon: [0xff2e93, 0x00f0ff, 0xffe14a], it: '#ffe14a', ink: '#1a1a6e',
+};
+function bankY(z) { // how far the ground drops into the bayou at this z
+  if (z <= CH.z0 || z >= CH.z1) return 0;
+  if (z < CH.z0 + CH.slope) return -(z - CH.z0) / CH.slope * CH.depth;
+  if (z > CH.z1 - CH.slope) return -(CH.z1 - z) / CH.slope * CH.depth;
+  return -CH.depth;
+}
+function surfaceAt(v) { // 'road', 'dirt' (grass lots and the banks) or 'water'
+  const x = v.x, z = v.z;
+  if (z > CH.z0 && z < CH.z1) {
+    if (v.layer === 'deck') return 'road';
+    return z > CH.w0 && z < CH.w1 && Math.abs(x - CH.fordX) > CH.fordW ? 'water' : 'dirt';
+  }
+  if (z >= CH.z1) return 'road';
+  for (const n of NODES) if (Math.abs(x - n) <= ROAD / 2 || Math.abs(z - n) <= ROAD / 2) return 'road';
+  if (Math.abs(x - PLAZA.x) < BLOCK / 2 && Math.abs(z - PLAZA.z) < BLOCK / 2) return 'road';
+  return 'dirt';
+}
+const scene3 = new THREE.Scene();
+const cam = new THREE.PerspectiveCamera(58, W / H, 0.3, 2400); camReady = true;
+{ // the sunset sky
+  const c = document.createElement('canvas'); c.width = 4; c.height = 512; const g = c.getContext('2d');
+  const gr = g.createLinearGradient(0, 0, 0, 512); PAL.sky.forEach(([p, col]) => gr.addColorStop(p, col));
+  g.fillStyle = gr; g.fillRect(0, 0, 4, 512);
+  const t = new THREE.CanvasTexture(c); t.colorSpace = THREE.SRGBColorSpace; scene3.background = t;
+}
+scene3.fog = new THREE.Fog(PAL.fog, 170, 680);
+scene3.add(new THREE.HemisphereLight(0xb9a0ff, 0xff7a9a, 2.3));
+const SUN_DIR = new THREE.Vector3(-0.42, 0.36, 0.83).normalize();   // low in the north-west, behind downtown: long shadows
+const sun = new THREE.DirectionalLight(0xffb36b, 3.0); sun.castShadow = !CHEAP;
+sun.shadow.mapSize.set(2048, 2048); sun.shadow.bias = -0.0006;
+{ const sc = sun.shadow.camera; sc.left = -95; sc.right = 95; sc.top = 95; sc.bottom = -95; sc.near = 10; sc.far = 420; }
+scene3.add(sun, sun.target);
+
+let vseed = 20261122; const vr = () => (vseed = (vseed * 16807) % 2147483647, (vseed & 0xffff) / 0xffff); // looks only, never gameplay
+const lit = [], glow = [];                                 // boxes to draw: lit by the sun, or glowing
+const box = (w, h, d, c, x, y, z) => lit.push([w, h, d, c, x, y, z]);
+const neon = (w, h, d, c, x, y, z) => glow.push([w, h, d, c, x, y, z]);
+const unitBox = new THREE.BoxGeometry(1, 1, 1);
+const lam = (c, o) => new THREE.MeshLambertMaterial({ color: c, flatShading: true, ...o });
+function flush(list, mat, shadows) {
+  const m = new THREE.InstancedMesh(unitBox, mat, list.length), o = new THREE.Object3D(), col = new THREE.Color();
+  list.forEach((b, i) => { o.position.set(b[4], b[5], b[6]); o.scale.set(b[0], b[1], b[2]); o.updateMatrix(); m.setMatrixAt(i, o.matrix); m.setColorAt(i, col.set(b[3])); });
+  m.castShadow = m.receiveShadow = shadows; m.frustumCulled = false; scene3.add(m); return m;
+}
+function slab(x0, x1, zA, yA, zB, yB, color, o) { // a flat or sloping sheet of ground between two z lines
+  const g = new THREE.BufferGeometry();
+  g.setAttribute('position', new THREE.Float32BufferAttribute([x0, yA, zA, x1, yA, zA, x1, yB, zB, x0, yA, zA, x1, yB, zB, x0, yB, zB], 3)); g.computeVertexNormals();
+  const m = new THREE.Mesh(g, new THREE.MeshLambertMaterial({ color, side: THREE.DoubleSide, ...o })); m.receiveShadow = true; scene3.add(m); return m;
+}
+function building(x, z, w, d) {
+  const h = 10 + vr() * 18, c = PAL.bld[Math.floor(vr() * PAL.bld.length)];
+  box(w, h, d, c, x, h / 2, z); walls.push({ x0: x - w / 2, x1: x + w / 2, z0: z - d / 2, z1: z + d / 2 });   // only the building itself is solid
+  for (let y = 4; y < h - 1.5; y += 3.3) { box(w + 0.24, 1.5, d * 0.84, PAL.win, x, y, z); box(w * 0.84, 1.5, d + 0.24, PAL.win, x, y, z); } // glass bands, all four faces
+  box(w * 0.6, 2.4, d * 0.6, PAL.roof[Math.floor(vr() * 2)], x, h + 1.2, z);
+  const n = PAL.neon[Math.floor(vr() * 3)], side = Math.floor(vr() * 4);                                                                 // one neon sign strip
+  if (side < 2) neon(0.4, 1.5, d * 0.55, n, x + (side ? 1 : -1) * (w / 2 + 0.25), 6.6, z); else neon(w * 0.55, 1.5, 0.4, n, x, 6.6, z + (side === 2 ? 1 : -1) * (d / 2 + 0.25));
+}
+const palms = [];
+function kerbs(x0, x1, z0, z1) { // red and white stripes round a block, low enough to drive over
+  let i = 0;
+  for (let x = x0; x < x1 - 0.1; x += 4, i++) { box(4, 0.16, 0.7, i % 2 ? PAL.kerbA : PAL.kerbB, x + 2, 0.08, z0); box(4, 0.16, 0.7, i % 2 ? PAL.kerbB : PAL.kerbA, x + 2, 0.08, z1); }
+  for (let z = z0; z < z1 - 0.1; z += 4, i++) { box(0.7, 0.16, 4, i % 2 ? PAL.kerbA : PAL.kerbB, x0, 0.08, z + 2); box(0.7, 0.16, 4, i % 2 ? PAL.kerbB : PAL.kerbA, x1, 0.08, z + 2); }
+}
+// Every block is open ground: grass you can drive across, with buildings standing on it as
+// separate obstacles, a few parks with nothing but palms and a pond, and the paved plaza.
+for (const bx of BCEN) for (const bz of BCEN) {
+  const hb = BLOCK / 2, first = walls.length;
+  kerbs(bx - hb, bx + hb, bz - hb, bz + hb);
+  if (bx === PLAZA.x && bz === PLAZA.z) {                   // the plaza: paving and a fountain to dodge round
+    box(BLOCK, 0.06, BLOCK, PAL.walk, bx, 0.03, bz);
+    for (let i = -2; i <= 2; i++) for (let j = -2; j <= 2; j++) if ((i + j) % 2 === 0) box(7.6, 0.04, 7.6, 0xff8fc7, bx + i * 7.6, 0.08, bz + j * 7.6);
+    box(9, 0.9, 9, 0x00d2ff, bx, 0.6, bz); box(7.4, 0.5, 7.4, 0x7df0ff, bx, 1.05, bz); box(1.6, 4.2, 1.6, 0xf2f2ff, bx, 2.4, bz); neon(2.6, 0.5, 2.6, 0xffe14a, bx, 4.7, bz);
+    posts.push({ x: bx, z: bz, r: 5.6 });
+    for (const [dx, dz] of [[-16, -16], [16, -16], [-16, 16], [16, 16]]) { palms.push([bx + dx, bz + dz, 0]); posts.push({ x: bx + dx, z: bz + dz, r: 0.6 }); }
+    continue;
+  }
+  box(BLOCK, 0.06, BLOCK, GRASS, bx, 0.03, bz);
+  const kind = Math.floor(vr() * 5), spots = [[-18, -18], [18, -18], [-18, 18], [18, 18], [-18, 0], [18, 0], [0, -18], [0, 18]];
+  if (kind <= 1) building(bx, bz, 19 + vr() * 6, 19 + vr() * 6);                          // one building on a wide lawn
+  else if (kind === 2) { if (vr() < 0.5) for (const s of [-1, 1]) building(bx + s * 11, bz, 11, 27); else for (const s of [-1, 1]) building(bx, bz + s * 11, 27, 11); }   // two, with a lane between
+  else if (kind === 3) for (const sx of [-1, 1]) for (const sz of [-1, 1]) building(bx + sx * 11.5, bz + sz * 11.5, 11, 11);   // four, with a cross of grass
+  else { box(15, 0.04, 10, POND, bx + 3, 0.08, bz - 2); for (let i = 0; i < 4; i++) spots.push([(vr() - 0.5) * 26, (vr() - 0.5) * 26]); }   // a park: palms and a pond to splash through
+  for (const [dx, dz] of spots) {
+    const x = bx + dx, z = bz + dz;
+    if (vr() > (kind === 4 ? 0.85 : 0.5) || walls.slice(first).some(w => x > w.x0 - 2.5 && x < w.x1 + 2.5 && z > w.z0 - 2.5 && z < w.z1 + 2.5)) continue;
+    palms.push([x, z, 0]); posts.push({ x, z, r: 0.5 });    // a palm trunk stops a car; everything else is open
+  }
+}
+// lane dashes down every street, clear of the junctions
+for (const n of NODES) for (let t = -124; t < 124; t += 7) {
+  if (NODES.some(m => Math.abs(t + 1.5 - m) < 11)) continue;
+  box(0.45, 0.04, 3, PAL.line, n, 0.03, t + 1.5); box(3, 0.04, 0.45, PAL.line, t + 1.5, 0.03, n);
+}
+for (let t = -124; t < 124; t += 7) if (!NODES.some(m => Math.abs(t + 1.5 - m) < 11)) box(3, 0.04, 0.45, PAL.line, t + 1.5, 0.03, 180);   // downtown's street
+for (let z = CH.z0 - 1; z < CH.z1; z += 7) box(0.45, 0.04, 3, PAL.line, 0, 0.03, z + 1.5);                                             // over the bridge
+
+// ---- The bayou: banks sloping down to dirt trails and shallow water, 4.5 m below the streets
+{
+  const X0 = -EDGE, X1 = EDGE, bot = -CH.depth, sA = CH.z0 + CH.slope, sB = CH.z1 - CH.slope;
+  slab(X0, X1, CH.z0, 0, sA, bot, GRASS); slab(X0, X1, sB, bot, CH.z1, 0, GRASS);           // the two banks
+  slab(X0, X1, sA, bot, sB, bot, DIRT);                                                       // the trails along the bottom
+  slab(X0 - 600, X1 + 600, CH.w0, bot + 0.2, CH.w1, bot + 0.2, WATER, { transparent: true, opacity: 0.82 });   // the water, running on out of town
+  const f0 = CH.fordX - CH.fordW, f1 = CH.fordX + CH.fordW;
+  slab(f0, f1, CH.w0 - 1, bot + 0.24, CH.w1 + 1, bot + 0.24, GRAVEL);                         // the low-water crossing
+  slab(f0, f1, CH.z0, 0.03, sA, bot + 0.03, DIRT); slab(f0, f1, sB, bot + 0.03, CH.z1, 0.03, DIRT);   // dirt ramps down to it
+  slab(f0, f1, ROAD / 2 + 120, 0.04, CH.z0, 0.04, DIRT); slab(f0, f1, CH.z1, 0.04, 180 - ROAD / 2, 0.04, DIRT);
+  for (let x = X0, i = 0; x < X1; x += 4, i++) for (const z of [CH.z0 - 0.6, CH.z1 + 0.6]) { if (Math.abs(x + 2) < CH.bridgeW + 1 || Math.abs(x + 2 - CH.fordX) < CH.fordW) continue; box(4, 0.16, 0.7, i % 2 ? PAL.kerbA : PAL.kerbB, x + 2, 0.08, z); }
+  // the bridge: a flat deck at street level, striped rails, white arches you can see from across town
+  const bw = CH.bridgeW, len = CH.z1 - CH.z0, mid = (CH.z0 + CH.z1) / 2;
+  box(bw * 2 + 1.2, 0.6, len + 0.4, PAL.road, 0, -0.3, mid);
+  for (let z = CH.z0, i = 0; z < CH.z1; z += 4, i++) for (const s of [-1, 1]) box(0.6, 1.1, 4, i % 2 ? PAL.kerbA : PAL.kerbB, s * (bw + 0.3), 0.55, z + 2);
+  for (const z of [CH.z0 + CH.slope / 2, CH.z1 - CH.slope / 2]) box(bw * 2 + 1.4, CH.depth, CH.slope, CONCRETE, 0, -CH.depth / 2 - 0.3, z);   // abutments
+  for (const s of [-1, 1]) for (const z of [CH.w0 + 0.6, CH.w1 - 0.6]) box(1.3, CH.depth, 1.3, CONCRETE, s * (bw - 2), -CH.depth / 2 - 0.3, z);   // piers in the water
+  const archY = z => 9.5 * (1 - ((z - mid) / (len / 2)) ** 2), white = lam(0xf2f2ff), N = 10;
+  for (const s of [-1, 1]) for (let i = 0; i < N; i++) {
+    const za = CH.z0 + len * i / N, zb = CH.z0 + len * (i + 1) / N, ya = archY(za), yb = archY(zb), L = Math.hypot(zb - za, yb - ya);
+    const m = new THREE.Mesh(unitBox, white); m.scale.set(0.8, 0.8, L + 0.3); m.position.set(s * (bw + 0.3), (ya + yb) / 2 + 0.9, (za + zb) / 2); m.rotation.x = -Math.atan2(yb - ya, zb - za); m.castShadow = true; scene3.add(m);
+    if (i > 0) box(0.25, ya, 0.25, 0xf2f2ff, s * (bw + 0.3), ya / 2 + 0.9, za);            // hangers
+  }
+  for (const s of [-1, 1]) {
+    deckWalls.push({ x0: s > 0 ? bw : -bw - 1.2, x1: s > 0 ? bw + 1.2 : -bw, z0: CH.z0, z1: CH.z1 });
+    for (const z of [CH.z0, CH.z1]) posts.push({ x: s * (bw + 0.6), z, r: 0.7 });           // the rail ends, for everyone
+  }
+  lowWalls.push({ x0: -bw - 0.7, x1: bw + 0.7, z0: CH.z0, z1: CH.z0 + CH.slope }, { x0: -bw - 0.7, x1: bw + 0.7, z0: CH.z1 - CH.slope, z1: CH.z1 });
+}
+// ---- Downtown: a street on the far bank, and the skyline standing right behind it
+{
+  box(2 * EDGE, 0.06, NORTH - 188, PAL.walk, 0, 0.03, (188 + NORTH) / 2);
+  for (let x = -87; x <= 87; x += 29) { if (Math.abs(x) < 12) continue; palms.push([x, 190, 0]); posts.push({ x, z: 190, r: 0.5 }); }
+  const lights = 0xffe9a0;
+  const towers = [[-150, 30, 44, 0x2a3f9a, 'flat'], [-108, 32, 70, 0x00a8d8, 'step'], [-66, 28, 54, 0x6a3fb0, 'spire'], [-24, 38, 92, 0xf2f2ff, 'gable'],
+    [22, 30, 62, 0xff5e8a, 'flat'], [64, 34, 80, 0x24306e, 'step'], [106, 28, 50, 0x00d2ff, 'spire'], [146, 30, 40, 0xffd400, 'flat']];
+  for (let x = -124; x <= 124; x += 31) { const h = 7 + vr() * 6; box(26, h, 16, PAL.bld[Math.floor(vr() * PAL.bld.length)], x, h / 2, NORTH + 10); box(26.3, 1.4, 14, PAL.win, x, h * 0.6, NORTH + 10); }   // low blocks along the street
+  for (const [x, w, h, c, crown] of towers) {
+    const z = NORTH + 78 + w / 2;
+    box(w, h, w, c, x, h / 2, z);
+    for (let y = 8; y < h - 4; y += 7) { box(w + 0.3, 2.6, w * 0.86, lights, x, y, z); box(w * 0.86, 2.6, w + 0.3, lights, x, y, z); }   // lit floors at dusk
+    if (crown === 'step') { box(w * 0.7, 12, w * 0.7, c, x, h + 6, z); box(w * 0.4, 10, w * 0.4, c, x, h + 17, z); neon(w * 0.42, 1.2, w * 0.42, 0xff2e93, x, h + 22.6, z); }
+    else if (crown === 'spire') { box(w * 0.5, 8, w * 0.5, c, x, h + 4, z); box(1.2, 30, 1.2, 0xf2f2ff, x, h + 23, z); neon(2, 2, 2, 0xff2030, x, h + 39, z); }
+    else if (crown === 'gable') { for (const s of [-1, 1]) { box(w * 0.42, 16, w, c, x + s * w * 0.26, h + 8, z); box(w * 0.2, 12, w, c, x + s * w * 0.26, h + 22, z); } neon(w * 0.9, 1.4, 0.6, 0x00f0ff, x, h - 3, z - w / 2 - 0.3); }
+    else neon(w * 0.8, 1.6, 0.6, PAL.neon[Math.floor(vr() * 3)], x, h - 4, z - w / 2 - 0.3);
+  }
+}
+// the sea wall round the rest, striped, and the far shore
+walls.push({ x0: -400, x1: 400, z0: NORTH, z1: 400 }, { x0: -400, x1: 400, z0: -400, z1: -EDGE }, { x0: EDGE, x1: 400, z0: -400, z1: 400 }, { x0: -400, x1: -EDGE, z0: -400, z1: 400 });
+for (let t = -EDGE, i = 0; t < EDGE; t += 6, i++) box(6, 1.4, 1.2, i % 2 ? PAL.kerbA : PAL.kerbB, t + 3, 0.7, -EDGE - 0.6);
+for (let t = -EDGE, i = 0; t < NORTH; t += 6, i++) { if (t + 3 > CH.z0 && t + 3 < CH.z1) continue; for (const s of [-1, 1]) box(1.2, 1.4, 6, i % 2 ? PAL.kerbB : PAL.kerbA, s * (EDGE + 0.6), 0.7, t + 3); }
+for (let i = 0; i < 40; i++) { const a = Math.PI + i / 40 * Math.PI * 1.02 - 0.03, r = 215 + vr() * 110, h = 16 + vr() * 46; box(16 + vr() * 14, h + 6, 16 + vr() * 14, PAL.bld[i % PAL.bld.length], Math.cos(a) * r, h / 2 - 3, Math.sin(a) * r - 20); }
+flush(lit, new THREE.MeshLambertMaterial({ flatShading: true }), true); flush(glow, new THREE.MeshBasicMaterial(), false);
+{ // the streets' base, and the open water beyond the wall
+  const base = (w, d, z) => { const m = new THREE.Mesh(new THREE.PlaneGeometry(w, d), new THREE.MeshLambertMaterial({ color: PAL.road })); m.rotation.x = -Math.PI / 2; m.position.z = z; m.receiveShadow = true; scene3.add(m); };
+  base(2 * EDGE + 2, CH.z0 + EDGE + 1, (CH.z0 - EDGE - 1) / 2); base(2 * EDGE + 2, NORTH + 1 - CH.z1, (NORTH + 1 + CH.z1) / 2);
+  const sea = new THREE.Mesh(new THREE.PlaneGeometry(3400, 3400), new THREE.MeshLambertMaterial({ color: PAL.ground }));
+  sea.rotation.x = -Math.PI / 2; sea.position.y = -CH.depth - 0.1; scene3.add(sea);
+}
+{ // palms: tall leaning trunks with the fronds well above the camera, all instanced
+  const TH = 11.5;
+  const trunk = new THREE.InstancedMesh(new THREE.CylinderGeometry(0.22, 0.38, TH, 6), lam(0x6b3f2a), palms.length);
+  const frond = new THREE.InstancedMesh(new THREE.ConeGeometry(0.85, 5.6, 4), lam(0x14c46a), palms.length * 7);
+  const o = new THREE.Object3D();
+  palms.forEach(([x, z, y], i) => {
+    const lean = (vr() - 0.5) * 0.18; o.position.set(x, y + TH / 2, z); o.rotation.set(0, 0, lean); o.scale.set(1, 1, 1); o.updateMatrix(); trunk.setMatrixAt(i, o.matrix);
+    for (let k = 0; k < 7; k++) { const a = k / 7 * Math.PI * 2; o.position.set(x - lean * TH / 2 + Math.cos(a) * 2.1, y + TH + 0.2, z + Math.sin(a) * 2.1); o.rotation.set(Math.sin(a) * 1.25, 0, -Math.cos(a) * 1.25); o.updateMatrix(); frond.setMatrixAt(i * 7 + k, o.matrix); }
+  });
+  trunk.castShadow = frond.castShadow = true; trunk.frustumCulled = frond.frustumCulled = false; scene3.add(trunk, frond);
+}
+const horizon = new THREE.Group(); scene3.add(horizon);    // the huge low sun and far hills ride with the camera
+{
+  const far = c => new THREE.MeshBasicMaterial({ color: c, fog: false });
+  const disc = new THREE.Mesh(new THREE.CircleGeometry(250, 48), far(0xfff2a0)); disc.position.set(SUN_DIR.x * 1700, 120, SUN_DIR.z * 1700); disc.lookAt(0, 120, 0); horizon.add(disc);
+  for (let i = 0; i < 5; i++) { const b = new THREE.Mesh(new THREE.PlaneGeometry(640, 12 + i * 5), far(0xff5a8a)); b.position.set(SUN_DIR.x * 1690, 8 + i * 40, SUN_DIR.z * 1690); b.lookAt(0, b.position.y, 0); horizon.add(b); }
+  for (let i = 0; i < 30; i++) { const a = i / 30 * Math.PI * 2, m = new THREE.Mesh(new THREE.ConeGeometry(150 + vr() * 110, 120 + vr() * 150, 4), far(i % 2 ? 0x3a1f7a : 0x5a2a9a)); m.position.set(Math.cos(a) * 1500, 30, Math.sin(a) * 1500); m.rotation.y = vr() * 3; horizon.add(m); }
+}
+const sightWalls = walls.concat(posts.map(p => ({ x0: p.x - p.r, x1: p.x + p.r, z0: p.z - p.r, z1: p.z + p.r })));   // what a bot will not try to drive straight through: walls and palm trunks
+const sightWallsBank = sightWalls.concat(lowWalls);         // and, unless it is looking straight along the bridge, the abutments under it
+
+// =========================================================================================
+// THE RIGS. Each kind has its own outline, strength and weakness (config.js), and each takes
+// any driver: you, a bot, later a remote player. A driver is a function (vehicle) -> { throttle, steer, hand }.
+// =========================================================================================
+const RIGS = ['amb', 'fire', 'cop', 'hum'], NR = 8;   // eight seats, two of each kind: you pick one of the first four, bots fill as many of the rest as the match asks for
+const SEAT_NAMES = ['Medic 3', 'Engine 9', 'Unit 12', 'Guard 7', 'Medic 5', 'Engine 2', 'Unit 30', 'Guard 4'];
+const KINDS = {
+  amb: { name: 'Medic 3', label: 'Ambulance', len: 6.4, wid: 2.6, stat: 'amb', hud: '#ffffff', good: 'Quickest off the line', bad: 'Lightest: easy to shove' },
+  fire: { name: 'Engine 9', label: 'Fire engine', len: 8.6, wid: 2.8, stat: 'fire', hud: '#ff4a3a', good: 'Unshakeable in a crash', bad: 'Wide turns, slow start' },
+  cop: { name: 'Unit 12', label: 'Police cruiser', len: 4.9, wid: 2.4, stat: 'cop', hud: '#4a8cff', good: 'Fastest on pavement', bad: 'Bogs down on dirt' },
+  hum: { name: 'Guard 7', label: 'Humvee', len: 5.3, wid: 3.0, stat: 'hum', hud: '#c9d24a', good: 'Owns grass and the bayou', bad: 'Outrun on a straight' },
+  civ: { name: 'Civilian', label: 'Civilian car', len: 4.3, wid: 2.2, stat: null, hud: '#b9a0ff' },
+};
+function buildVehicle(kind, tint) {
+  const g = new THREE.Group(), K = KINDS[kind], L = K.len, Wd = K.wid, wr = kind === 'hum' ? 0.82 : 0.62, wy = wr + 0.1;
+  const part = (w, h, d, c, x, y, z, mat) => { const m = new THREE.Mesh(unitBox, mat || lam(c)); m.scale.set(w, h, d); m.position.set(x, y, z); m.castShadow = true; g.add(m); return m; };
+  let roof;
+  if (kind === 'amb') {                                     // tall white box body, low cab, red crosses
+    const Hb = 2.5, by = wy + Hb / 2 + 0.1; roof = by + Hb / 2;
+    part(Wd, Hb, L * 0.66, 0xffffff, 0, by, -L * 0.17); part(Wd, Hb * 0.7, L * 0.32, 0xffffff, 0, by - Hb * 0.15, L * 0.33);
+    part(Wd + 0.06, Hb * 0.28, L * 0.2, 0x8fd8ff, 0, by + 0.05, L * 0.36); part(Wd + 0.08, 0.45, L * 0.64, 0xff3b30, 0, by - 0.35, -L * 0.17);
+    for (const s of [-1, 1]) { part(0.1, 1.3, 0.42, 0xff3b30, s * (Wd / 2 + 0.05), by + 0.5, -L * 0.17); part(0.1, 0.42, 1.3, 0xff3b30, s * (Wd / 2 + 0.05), by + 0.5, -L * 0.17); }
+    part(1.3, 0.42, 0.1, 0xff3b30, 0, by + 0.2, -L * 0.5 - 0.05); part(0.42, 1.3, 0.1, 0xff3b30, 0, by + 0.2, -L * 0.5 - 0.05);
+  } else if (kind === 'fire') {                             // long red engine, ladder on top, hose reels
+    const Hb = 2.3, by = wy + Hb / 2 + 0.1; roof = by + Hb / 2;
+    part(Wd, Hb, L * 0.62, 0xff2d2d, 0, by, -L * 0.19); part(Wd, Hb * 1.08, L * 0.26, 0xff2d2d, 0, by + 0.1, L * 0.3); part(Wd * 0.9, Hb * 0.5, L * 0.1, 0xff2d2d, 0, by - 0.55, L * 0.46);
+    part(Wd + 0.06, Hb * 0.34, L * 0.18, 0x8fd8ff, 0, by + 0.35, L * 0.33); part(Wd + 0.08, 0.4, L * 0.98, 0xffd400, 0, by - 0.55, 0);
+    for (const s of [-0.55, 0.55]) part(0.16, 0.16, L * 0.74, 0xe8e8f0, s, roof + 0.55, -L * 0.14);
+    for (let i = 0; i < 7; i++) part(1.25, 0.12, 0.14, 0xe8e8f0, 0, roof + 0.55, -L * 0.48 + i * L * 0.113);
+    for (const s of [-1, 1]) part(0.2, 1.1, 1.1, 0x24204a, s * (Wd / 2 + 0.08), by + 0.2, -L * 0.3);
+  } else if (kind === 'cop') {                              // low dark sedan, white doors, long bonnet
+    const Hb = 0.95, by = wy + Hb / 2 + 0.05; roof = by + Hb / 2 + 0.95;
+    part(Wd, Hb, L, 0x1b1b3a, 0, by, 0); part(Wd + 0.06, Hb * 0.8, L * 0.34, 0xffffff, 0, by, -L * 0.02);
+    part(Wd * 0.88, 0.95, L * 0.42, 0x1b1b3a, 0, by + Hb / 2 + 0.47, -L * 0.07); part(Wd * 0.9, 0.6, L * 0.38, 0x8fd8ff, 0, by + Hb / 2 + 0.5, -L * 0.07);
+    part(Wd * 0.7, 0.3, 0.3, 0xe8e8f0, 0, by + 0.2, L * 0.5 + 0.2);                                         // push bar
+  } else if (kind === 'hum') {                              // wide, flat and slab-sided: big wheels, short cab, sloped back, snorkel and spare
+    const Hb = 1.15, by = wy + Hb / 2 + 0.25; roof = by + Hb / 2 + 1.0;
+    part(Wd, Hb, L, 0xb9a45a, 0, by, 0); part(Wd * 0.96, 0.25, L * 0.36, 0x8f7d3e, 0, by + Hb / 2 + 0.12, L * 0.31);                  // body, flat bonnet
+    part(Wd * 0.9, 1.0, L * 0.36, 0xb9a45a, 0, by + Hb / 2 + 0.5, -L * 0.05); part(Wd * 0.92, 0.5, L * 0.3, 0x8fd8ff, 0, by + Hb / 2 + 0.55, -L * 0.05);   // short cab, slit windows
+    const back = part(Wd * 0.9, 0.2, L * 0.34, 0x8f7d3e, 0, by + Hb / 2 + 0.5, -L * 0.36); back.rotation.x = -0.42;                 // sloped back
+    part(0.22, 1.9, 0.22, 0x24204a, Wd / 2 - 0.1, by + 0.9, L * 0.16); part(0.5, 1.4, 1.4, 0x1c1c24, 0, by + 0.25, -L / 2 - 0.3);   // snorkel, spare wheel
+    part(Wd + 0.5, 0.35, 0.5, 0x24204a, 0, wy + 0.25, L / 2 + 0.3); part(0.12, 2.6, 0.12, 0x24204a, -Wd / 2 + 0.2, roof + 1.3, -L * 0.2);   // bull bar, whip aerial
+    for (const s of [-1, 1]) part(0.12, 0.5, 0.9, 0xf2f2ff, s * (Wd / 2 + 0.03), by + 0.1, -L * 0.05);                              // a white door mark
+  } else {                                                  // a stubby hatchback with a roof rack
+    const Hb = 1.0, by = wy + Hb / 2 + 0.05; roof = by + Hb / 2 + 1.0;
+    part(Wd, Hb, L, tint, 0, by, 0); part(Wd * 0.94, 1.0, L * 0.62, tint, 0, by + Hb / 2 + 0.5, -L * 0.14); part(Wd * 0.96, 0.6, L * 0.56, 0x8fd8ff, 0, by + Hb / 2 + 0.5, -L * 0.14);
+    part(Wd * 0.8, 0.1, L * 0.5, 0x24204a, 0, roof + 0.12, -L * 0.14); part(Wd * 0.5, 0.5, L * 0.3, 0xe9b872, 0, roof + 0.4, -L * 0.14); // luggage on the rack
+  }
+  const lights = [];                                        // emergency rigs flash red and blue; the Humvee flashes amber
+  if (kind !== 'civ') for (const [dx, c] of [[-0.62, 0], [0.62, 1]]) lights.push(part(kind === 'hum' ? 0.6 : 1.05, 0.45, 0.7, 0xffffff, dx * (kind === 'hum' ? 1.6 : 1), roof + 0.25, kind === 'cop' || kind === 'hum' ? -L * 0.07 : L * 0.3, new THREE.MeshBasicMaterial()));
+  if (kind !== 'hum') { part(Wd + 0.2, 0.5, 0.5, 0x333344, 0, wy + 0.1, L / 2 + 0.1); part(Wd + 0.2, 0.5, 0.5, 0x333344, 0, wy + 0.1, -L / 2 - 0.1); }
+  const ww = kind === 'hum' ? 0.8 : 0.55, wheelG = new THREE.CylinderGeometry(wr, wr, ww, 10), hubG = new THREE.CylinderGeometry(wr * 0.5, wr * 0.5, ww + 0.05, 8), wm = lam(0x1c1c24), hm = lam(kind === 'hum' ? 0x8f7d3e : 0xffd400);
+  for (const sx of [-1, 1]) for (const sz of [-1, 1]) for (const [geo, m] of [[wheelG, wm], [hubG, hm]]) { const w = new THREE.Mesh(geo, m); w.rotation.z = Math.PI / 2; w.position.set(sx * Wd / 2, wr, sz * L * 0.32); w.castShadow = true; g.add(w); }
+  g.rotation.order = 'YXZ'; g.userData = { lights, roof, amber: kind === 'hum' }; scene3.add(g); return g;
+}
+const CIV_TINTS = [0xffc93c, 0x7dff5a, 0xff8fc7, 0x00d2ff, 0xff9a3d, 0xb9a0ff];
+const MAX_CIV = CONFIG.civ_count.max;
+const meshes = Array.from({ length: NR }, (_, i) => buildVehicle(RIGS[i % 4]));
+for (let i = 0; i < MAX_CIV; i++) meshes.push(buildVehicle('civ', CIV_TINTS[i % CIV_TINTS.length]));
+// a green ring under a rig that cannot be tagged yet: no tag-backs, made visible
+const safeRings = meshes.slice(0, NR).map(() => { const m = new THREE.Mesh(new THREE.RingGeometry(3.6, 4.4, 28), new THREE.MeshBasicMaterial({ color: 0x7dff5a, transparent: true, side: THREE.DoubleSide, depthWrite: false })); m.rotation.x = -Math.PI / 2; m.visible = false; scene3.add(m); return m; });
+
+// Battle Royale: ammo crates on the paved streets and along the dirt routes, and a pool of blaster bolts.
+const PICKUPS = [];
+{
+  const clear = (x, z) => !walls.some(w => x > w.x0 - 3 && x < w.x1 + 3 && z > w.z0 - 3 && z < w.z1 + 3) && !posts.some(p => Math.hypot(p.x - x, p.z - z) < p.r + 2.5);
+  for (const [x, z] of [[0, 0], [-60, 60], [60, -60], [-60, -60], [0, -120], [-120, 0], [120, 0], [-60, 180], [120, 180]]) PICKUPS.push({ x, z, layer: null, route: 'paved' });
+  PICKUPS.push({ x: 0, z: (CH.z0 + CH.z1) / 2, layer: 'deck', route: 'paved' });                                        // the middle of the bridge
+  for (const [x, z] of [[CH.fordX, 150], [-45, 142.5], [-95, 157.5], [105, 142.5]]) PICKUPS.push({ x, z, layer: 'low', route: 'dirt' });   // the low-water crossing and the bank trails
+  let lawns = 0;
+  for (const bx of BCEN) for (const bz of BCEN) { if (lawns >= 4 || (bx === PLAZA.x && bz === PLAZA.z) || (bx + bz) % 120 !== 0) continue; if (clear(bx, bz + 18.5)) { PICKUPS.push({ x: bx, z: bz + 18.5, layer: null, route: 'dirt' }); lawns++; } }
+}
+const crateMeshes = PICKUPS.map(p => {
+  const g = new THREE.Group(), y = (p.layer === 'low' ? bankY(p.z) : 0) + 1.5;
+  const body = new THREE.Mesh(unitBox, new THREE.MeshBasicMaterial({ color: 0xffe14a })); body.scale.set(1.7, 1.7, 1.7); g.add(body);
+  for (const r of [0, Math.PI / 2]) { const band = new THREE.Mesh(unitBox, new THREE.MeshBasicMaterial({ color: 0x1a1a6e })); band.scale.set(1.78, 0.4, 1.78); band.rotation.z = r; g.add(band); }
+  const ring = new THREE.Mesh(new THREE.RingGeometry(2.1, 2.6, 20), new THREE.MeshBasicMaterial({ color: 0xffe14a, transparent: true, opacity: 0.6, side: THREE.DoubleSide, depthWrite: false })); ring.rotation.x = -Math.PI / 2; ring.position.y = -1.25; g.add(ring);
+  g.position.set(p.x, y, p.z); g.visible = false; g.userData.y = y; scene3.add(g); return g;
+});
+const boltMeshes = Array.from({ length: 64 }, () => { const m = new THREE.Mesh(unitBox, new THREE.MeshBasicMaterial({ color: 0x7df0ff })); m.scale.set(0.42, 0.42, 3.2); m.visible = false; scene3.add(m); return m; });
+
+// The patient nobody wants: a scowling head, a shaking fist and a hospital gown flapping behind.
+const patient = new THREE.Group(); scene3.add(patient);
+let fist, gown;
+{
+  const part = (w, h, d, c, x, y, z, rz = 0) => { const m = new THREE.Mesh(unitBox, lam(c)); m.scale.set(w, h, d); m.position.set(x, y, z); m.rotation.z = rz; patient.add(m); return m; };
+  part(1.5, 0.9, 1.1, 0xbfe8ff, 0, 0.45, 0);                       // shoulders in the gown
+  part(0.95, 0.95, 0.95, 0xf2b48a, 0, 1.35, 0); part(1.0, 0.3, 1.0, 0xe8e8f0, 0, 1.9, 0);   // head, white hair
+  part(0.42, 0.13, 0.1, 0x24204a, -0.25, 1.52, 0.5, -0.45); part(0.42, 0.13, 0.1, 0x24204a, 0.25, 1.52, 0.5, 0.45); // the scowl
+  part(0.5, 0.12, 0.1, 0x24204a, 0, 1.08, 0.5); part(0.3, 0.3, 0.5, 0xf2b48a, 0, 1.3, 0.6);
+  fist = new THREE.Group(); fist.position.set(0.85, 0.7, 0); patient.add(fist);
+  const arm = new THREE.Mesh(unitBox, lam(0xf2b48a)); arm.scale.set(0.3, 1.3, 0.3); arm.position.y = 0.65; fist.add(arm);
+  const hand = new THREE.Mesh(unitBox, lam(0xf2b48a)); hand.scale.set(0.5, 0.5, 0.5); hand.position.y = 1.45; fist.add(hand);
+  const gc = document.createElement('canvas'); gc.width = gc.height = 64; const gx = gc.getContext('2d'); gx.fillStyle = '#eafcff'; gx.fillRect(0, 0, 64, 64);
+  gx.fillStyle = '#00b8e0'; for (let i = 0; i < 4; i++) for (let j = 0; j < 4; j++) gx.fillRect(4 + i * 16 + (j % 2) * 8, 4 + j * 16, 5, 5);   // little blue squares
+  const gt = new THREE.CanvasTexture(gc); gt.colorSpace = THREE.SRGBColorSpace;
+  const geo = new THREE.PlaneGeometry(1.7, 4.2, 1, 6); geo.rotateX(-Math.PI / 2); geo.translate(0, 0, -2.1);
+  gown = new THREE.Mesh(geo, new THREE.MeshBasicMaterial({ map: gt, side: THREE.DoubleSide })); gown.position.set(0, 0.7, -0.5); patient.add(gown);
+}
+// The IT marker: a yellow tag you can see across the district, through buildings.
+const marker = (() => {
+  const c = document.createElement('canvas'); c.width = c.height = 256; const x = c.getContext('2d');
+  x.fillStyle = PAL.it; x.strokeStyle = PAL.ink; x.lineWidth = 14; x.lineJoin = 'round';
+  x.beginPath(); x.moveTo(28, 24); x.lineTo(228, 24); x.lineTo(228, 150); x.lineTo(160, 150); x.lineTo(128, 232); x.lineTo(96, 150); x.lineTo(28, 150); x.closePath(); x.stroke(); x.fill();
+  x.fillStyle = PAL.ink; x.font = '900 104px "Arial Black", Arial'; x.textAlign = 'center'; x.fillText('IT', 128, 126);
+  const t = new THREE.CanvasTexture(c); t.colorSpace = THREE.SRGBColorSpace;
+  const s = new THREE.Sprite(new THREE.SpriteMaterial({ map: t, fog: false, depthTest: false })); s.renderOrder = 10; scene3.add(s); return s;
+})();
+// puffs: tyre smoke, splashes and crash sparks
+const puffs = [];
+for (let i = 0; i < 96; i++) { const m = new THREE.Mesh(unitBox, new THREE.MeshBasicMaterial({ color: 0xffc9a0, transparent: true, opacity: 0, depthWrite: false })); m.visible = false; scene3.add(m); puffs.push({ m, life: 0 }); }
+let puffI = 0;
+function puff(x, y, z, vx, vy, vz, size, life, color) {
+  if (REPLAY) return;
+  const p = puffs[puffI = (puffI + 1) % puffs.length];
+  Object.assign(p, { x, y, z, vx, vy, vz, size, life, max: life }); p.m.material.color.set(color); p.m.visible = true;
+}
+
+// =========================================================================================
+// THE GAME
+// =========================================================================================
+let MODE = 'tag';           // 'tag' (Patient Tag) or 'br' (Battle Royale): one town, one set of rigs, two sets of rules
+let scene, state, ME = 0;   // ME: which rig you drive (0 ambulance, 1 fire engine, 2 cruiser, 3 Humvee); bots drive the rest
+const nearestNode = (x, z) => [clamp(Math.round(x / PITCH) + 2, 0, 4), clamp(Math.round(z / PITCH) + 2, 0, 5)];
+const nodePos = n => [NODES[n[0]], NODES_Z[n[1]]];
+function neighbours(n, paved) { // junctions a street away. Only two streets cross the bayou: the bridge, and the dirt crossing
+  const o = [];
+  for (const [di, dj] of [[1, 0], [-1, 0], [0, 1], [0, -1]]) {
+    const i = n[0] + di, j = n[1] + dj; if (i < 0 || i > 4 || j < 0 || j > 5) continue;
+    if (dj && Math.max(j, n[1]) === 5 && !(i === 2 || (i === 3 && !paved))) continue;
+    o.push([i, j]);
+  }
+  return o;
+}
+function sightClear(x0, z0, x1, z1) { // can a vehicle drive straight from here to there?
+  const dx = x1 - x0, dz = z1 - z0, pad = 2.7;
+  for (const w of (Math.abs(x0) < 6.5 && Math.abs(x1) < 6.5 ? sightWalls : sightWallsBank)) {
+    let t0 = 0, t1 = 1;
+    for (const [p, d, lo, hi] of [[x0, dx, w.x0 - pad, w.x1 + pad], [z0, dz, w.z0 - pad, w.z1 + pad]]) {
+      if (Math.abs(d) < 1e-6) { if (p < lo || p > hi) { t0 = 2; break; } }
+      else { let a = (lo - p) / d, b = (hi - p) / d; if (a > b) [a, b] = [b, a]; t0 = Math.max(t0, a); t1 = Math.min(t1, b); if (t0 > t1) break; }
+    }
+    if (t0 <= t1) return false;
+  }
+  return true;
+}
+function routeStep(from, to) { // breadth-first over the street grid: the next junction on the way
+  if (from[0] === to[0] && from[1] === to[1]) return to;
+  const key = n => n[0] * 6 + n[1], prev = new Map([[key(to), null]]), q = [to];
+  while (q.length) { const n = q.shift(); for (const m of neighbours(n)) { if (prev.has(key(m))) continue; prev.set(key(m), n); if (key(m) === key(from)) return n; q.push(m); } }
+  return to;
+}
+const stat = (v, k) => v.kind === 'civ' ? ({ top: tune.civ_speed * 1.6, accel: 9, turn: 1, mass: tune.civ_mass })[k] : tune[KINDS[v.kind].stat + '_' + k];
+const rigs = () => state.vehicles.slice(0, NR).filter(v => v.active);
+const who = i => SEAT_NAMES[i] + (i === ME && !(NET && NET.host) ? ' (you)' : NET && NET.humans && NET.humans.includes(i) ? ` (P${(NET.pnum && NET.pnum[i]) || '?'})` : ' (bot)');
+const botSeats = () => [0, 1, 2, 3, 4, 5, 6, 7].filter(i => i !== ME).slice(0, tune.bots);
+
+// ---- Drivers -------------------------------------------------------------------------------
+function steerTo(v, tx, tz, turnShare) { // a steering wheel pointed at a spot
+  const diff = wrapA(Math.atan2(tx - v.x, tz - v.z) - v.h);
+  return { diff, steer: clamp(-diff * 2.4, -1, 1) * turnShare };
+}
+function humanDriver() {
+  const d = {
+    throttle: (down.has('KeyW') || down.has('ArrowUp') ? 1 : 0) - (down.has('KeyS') || down.has('ArrowDown') ? 1 : 0),
+    steer: (down.has('KeyD') || down.has('ArrowRight') ? 1 : 0) - (down.has('KeyA') || down.has('ArrowLeft') ? 1 : 0),
+    hand: down.has('Space'), fire: down.has('KeyF') || down.has('KeyK'),
+  };
+  if (touch.on) { // the thumb pad: forward and back are the throttle, sideways is the wheel
+    if (touch.steerId !== null) {
+      const R = tune.touch_pad_range, dz = tune.touch_pad_deadzone, ax = clamp((touch.x - touch.x0) / R, -1, 1), ay = clamp((touch.y0 - touch.y) / R, -1, 1);
+      const live = v => Math.abs(v) < dz ? 0 : Math.sign(v) * (Math.abs(v) - dz) / (1 - dz);
+      d.steer = live(ax); d.throttle = live(ay);
+    }
+    d.hand = d.hand || touchHeld('drift'); d.fire = d.fire || touchHeld('fire');
+  }
+  return d;
+}
+function hopsFrom(from) { // how many streets from one junction to every other
+  const key = n => n[0] * 6 + n[1], dist = new Map([[key(from), 0]]), q = [from];
+  while (q.length) { const n = q.shift(); for (const m of neighbours(n)) if (!dist.has(key(m))) { dist.set(key(m), dist.get(key(n)) + 1); q.push(m); } }
+  return n => dist.get(key(n));
+}
+function pathTo(from, to) { // the junctions on the shortest way there, first to last
+  const key = n => n[0] * 6 + n[1], prev = new Map([[key(to), null]]), q = [to];
+  while (q.length) { const n = q.shift(); if (key(n) === key(from)) break; for (const m of neighbours(n)) if (!prev.has(key(m))) { prev.set(key(m), n); q.push(m); } }
+  const path = [from]; let n = from; while (prev.get(key(n))) { n = prev.get(key(n)); path.push(n); }
+  return path;
+}
+function navTo(v, x, z, layer) { // how to drive to a spot: straight if nothing is in the way, else round the block by the shortest way
+  const lined = !v.layer && Math.abs(v.x) < CH.bridgeW - 2;             // at one end of the bridge, pointing along it
+  if (layer === 'deck' && v.layer !== 'deck' && !lined) return { tx: 0, tz: v.z < (CH.z0 + CH.z1) / 2 ? CH.z0 - 8 : CH.z1 + 8, aimNode: null, bridge: true };   // it is up on the bridge: go to the nearer end, not underneath
+  if (v.layer === 'deck' && layer === 'low') return { tx: 0, tz: Math.cos(v.h) > 0 ? CH.z1 + 8 : CH.z0 - 8, aimNode: null, bridge: true };                       // it is down on the bank: off the bridge first
+  if (sightClear(v.x, v.z, x, z)) return { tx: x, tz: z, aimNode: null };
+  const path = pathTo(nearestNode(v.x, v.z), nearestNode(x, z)); let k = 0;
+  for (let i = path.length - 1; i > 0; i--) { const [nx, nz] = nodePos(path[i]); if (sightClear(v.x, v.z, nx, nz)) { k = i; break; } }
+  if (k === 0 && path.length > 1) { const [hx, hz] = nodePos(path[0]); if (Math.hypot(hx - v.x, hz - v.z) < 15) k = 1; }   // at the junction already: on to the next, never round and round this one
+  const [tx, tz] = nodePos(path[k]); return { tx, tz, aimNode: path[k] };
+}
+function crossingOf(o) { // is this rig committing to a way over the bayou? which one, and which way?
+  if (o.layer === 'deck') return { x: 0, north: Math.cos(o.h) > 0 };
+  if (o.layer === 'low' && Math.abs(o.x - CH.fordX) < 22) return { x: CH.fordX, north: Math.cos(o.h) > 0 };
+  const sp = Math.hypot(o.vx, o.vz); if (sp < 8 || Math.abs(o.vz) < Math.abs(o.vx) * 1.3) return null;   // crawling, or not pointed across
+  const north = o.vz > 0;
+  if (north ? (o.z < 62 || o.z > CH.z0) : (o.z > 196 || o.z < CH.z1)) return null;                    // not on the approach
+  for (const cx of [0, CH.fordX]) if (Math.abs(o.x - cx) < 9) return { x: cx, north };
+  return null;
+}
+
+// ---- Patient Tag: hunt when IT, run when not ------------------------------------------------
+function tagBrain(v) {
+  const r = Math.min(state.round, 3), speedShare = tune['bot_speed_r' + r], turnShare = tune['bot_turn_r' + r], lead = tune['bot_lead_r' + r];
+  const b = v.bot, sp = Math.hypot(v.vx, v.vz), it = state.vehicles[state.it];
+  if (v === it) {
+    // HUNT. Pick the rival it can reach soonest: near ones first, never one still in its grace, a lean
+    // towards whoever is winning and towards you. Then cut them off rather than follow them.
+    let best = null, bestD = 1e9; const leader = rigs().reduce((a, c) => c.clean > a.clean ? c : a);
+    for (const o of rigs()) {
+      if (o === v) continue;
+      let d = Math.hypot(o.x - v.x, o.z - v.z) + (o.immune > 0 ? 40 + o.immune * 30 : 0);
+      if (o === leader) d -= tune.bot_leader_bias * (r >= 3 ? 1 : 0.4);
+      if (liveHuman(o.i)) d -= tune.bot_player_bias;
+      if (o === b.prey) d -= 12;                                          // stay on a target rather than dithering between two
+      if (d < bestD) { bestD = d; best = o; }
+    }
+    if (b.prey !== best) b.way = null;
+    b.prey = best;
+    const dist = Math.hypot(best.x - v.x, best.z - v.z), ahead = lead * Math.min(dist / Math.max(sp, 12), 1.6);
+    // INTERCEPT. If the prey is committing to the bridge or the dirt crossing, work out where it comes
+    // off the far side and whether this rig can be waiting there: straight to the exit if it is already
+    // on that bank, or over the other crossing if that is quick enough.
+    const cr = !b.way && dist > 26 ? crossingOf(best) : null;
+    if (cr) {
+      const exitZ = cr.north ? CH.z1 + 10 : CH.z0 - 10, top = stat(v, 'top') * tune.it_speed_bonus * speedShare, stem = KINDS[v.kind].stat;
+      const preyEta = Math.abs(best.z - exitZ) / Math.max(Math.hypot(best.vx, best.vz), 14);
+      const onFarBank = cr.north ? v.z > CH.z1 - 2 : v.z < CH.z0 + 2, inSameCrossing = !!v.layer && Math.abs(v.x - cr.x) < 24;
+      let eta = Infinity, way = null, how = '';
+      if (onFarBank) { eta = Math.hypot(cr.x - v.x, exitZ - v.z) / top; way = [[cr.x, exitZ]]; how = 'waits at the exit'; }
+      else if (!inSameCrossing) {
+        const ox = cr.x === 0 ? CH.fordX : 0, inZ = cr.north ? CH.z0 - 6 : CH.z1 + 6, outZ = cr.north ? CH.z1 + 6 : CH.z0 - 6, share = ox === 0 ? 1 : tune[stem + '_dirt'];
+        eta = (Math.hypot(ox - v.x, inZ - v.z) + (CH.z1 - CH.z0 + 12) / share + Math.abs(ox - cr.x)) / top; way = [[ox, inZ], [ox, outZ], [cr.x, exitZ]]; how = 'takes the other crossing';
+      }
+      if (eta < preyEta + tune.bot_intercept_margin) { b.way = way; b.wayT = Math.max(4, eta + 2.5); b.wayPrey = best; events.push({ t: state.t, intercept: [v.i, best.i, cr.x === 0 ? 'bridge' : 'dirt crossing', how, +eta.toFixed(1), +preyEta.toFixed(1)] }); }
+    }
+    if (b.way) {
+      b.wayT -= STEP;
+      if (b.wayT <= 0 || dist < 22 || !best.active || (sightClear(v.x, v.z, best.x, best.z) && dist < 45)) b.way = null;   // close enough to simply hit them, or the chance has gone
+      else {
+        const [wx, wz] = b.way[0];
+        if (Math.hypot(wx - v.x, wz - v.z) < 10) { b.way.shift(); if (!b.way.length) b.way = null; }
+        if (b.way) return navTo(v, b.way[0][0], b.way[0][1], null);
+      }
+    }
+    const px = best.x + best.vx * ahead, pz = best.z + best.vz * ahead;
+    let nav = navTo(v, px, pz, best.layer);
+    if (nav.aimNode && sightClear(v.x, v.z, best.x, best.z)) nav = { tx: best.x, tz: best.z, aimNode: null };
+    nav.ramming = dist < 18 && !nav.bridge;                               // close enough: no braking, just hit them
+    return nav;
+  }
+  // RUN. Head for the junction that is most streets away from IT and still has ways out beyond it:
+  // never towards IT, never into a corner, and no U-turns with IT on your bumper.
+  const np = b.node && nodePos(b.node), dIt = Math.hypot(it.x - v.x, it.z - v.z) || 1;
+  b.think -= STEP;
+  const reach = Math.max(14, sp * 0.7);                                   // the faster it goes, the sooner it must plan the next turn
+  if (!b.node || Math.hypot(np[0] - v.x, np[1] - v.z) < reach || b.think <= 0) {
+    const here = nearestNode(v.x, v.z), hp = nodePos(here), fx = Math.sin(v.h), fz = Math.cos(v.h), ix = (it.x - v.x) / dIt, iz = (it.z - v.z) / dIt;
+    const hops = hopsFrom(nearestNode(it.x + it.vx * 0.8, it.z + it.vz * 0.8)), atHere = Math.hypot(hp[0] - v.x, hp[1] - v.z) < reach;
+    b.safe = dIt > 100 && hops(here) >= 4;                                // IT is a long way off: cruise round the blocks, do not bolt for a far corner
+    let best = here, bestS = -1e9;
+    for (const n of atHere ? neighbours(here) : neighbours(here).concat([here])) {
+      const [nx, nz] = nodePos(n), dx = nx - v.x, dz = nz - v.z, d = Math.hypot(dx, dz) || 1, outs = neighbours(n);
+      let onward = 0; for (const m of outs) onward = Math.max(onward, hops(m));
+      let s = Math.min(hops(n), 5) * 45 + Math.min(onward, 6) * 20 + Math.min(Math.hypot(nx - it.x, nz - it.z), 150) * 0.6;   // far enough is far enough
+      const fwd = (dx * fx + dz * fz) / d;
+      if (fwd < -0.3) s -= 35 + (dIt < 45 ? 60 : 0) + (b.safe ? 110 : 0); else if (fwd > 0.5) s += b.safe ? 45 : 14;   // keep your speed; with IT far away, just keep rolling
+      if ((dx * ix + dz * iz) / d > 0.55 && dIt < 95) s -= 140;
+      s -= outs.length === 1 ? 110 : outs.length === 2 ? 45 : 0;         // dead ends and the corners of the map are traps
+      if (n[1] === 5) s -= 25;                                           // so is the far bank: two ways off it
+      if (n[1] !== here[1] && Math.max(n[1], here[1]) === 5 && n[0] === 3) s += (tune[KINDS[v.kind].stat + '_dirt'] - 0.8) * 70;   // the dirt crossing suits some rigs and not others
+      if (rigs().some(o => o !== v && o !== it && Math.hypot(o.x - nx, o.z - nz) < 20)) s += 10;   // company: IT may take them instead
+      s += rng() * 34 * (1.02 - turnShare);
+      if (s > bestS) { bestS = s; best = n; }
+    }
+    b.node = best; b.think = b.safe ? 1.2 : 0.5;
+  }
+  // IT on the bumper: jink away at the last moment
+  b.dodgeCool -= STEP;
+  const closing = ((it.vx - v.vx) * (v.x - it.x) + (it.vz - v.vz) * (v.z - it.z)) / dIt;
+  if (b.dodge <= 0 && b.dodgeCool <= 0 && dIt < tune.bot_dodge_range && closing > 2 && sp > 8 && v.layer !== 'deck') {
+    b.dodge = tune.bot_dodge_time; b.dodgeCool = tune.bot_dodge_cooldown * (r === 1 ? 1.8 : 1);
+    b.dodgeSteer = ((it.x - v.x) * Math.cos(v.h) - (it.z - v.z) * Math.sin(v.h)) > 0 ? -1 : 1;
+  }
+  if (b.dodge > 0) { b.dodge -= STEP; return { direct: { throttle: 1, steer: b.dodgeSteer, hand: b.dodge > tune.bot_dodge_time * 0.5, fire: false } }; }
+  const [tx, tz] = nodePos(b.node);
+  return { tx, tz, aimNode: b.node, cruise: b.safe ? tune.bot_cruise : 1 };
+}
+
+// ---- Battle Royale: get ammo when dry, pick a fight it can win, line the shot up, know when to quit
+function nearestCrate(v) {
+  let best = null, bestD = 1e9;
+  for (const p of state.pickups) { if (p.wait > 0) continue; const d = Math.hypot(p.x - v.x, p.z - v.z) + (p.layer && p.layer !== v.layer ? 25 : 0); if (d < bestD) { bestD = d; best = p; } }
+  return best && { p: best, d: bestD };
+}
+function battleBrain(v) {
+  const b = v.bot; b.react -= STEP; if (b.shunT > 0) b.shunT -= STEP;
+  // It decides, and looks, only every so often: that pause is its reaction time, and what it then
+  // believes about its target is that old, with a little aiming error on top.
+  if (b.react <= 0) {
+    b.react = tune.bot_react * (0.7 + rng() * 0.6);
+    const foes = rigs().filter(o => o !== v), crate = nearestCrate(v);
+    if (b.prey) {
+      const d = Math.hypot(b.prey.x - v.x, b.prey.z - v.z);
+      const why = !b.prey.active ? 'gone' : b.chaseT > tune.bot_break_off ? 'too long without a hit' : d > 170 ? 'too far' : (v.hp <= 30 && b.prey.hp > v.hp + 30) ? 'outmatched' : '';
+      if (why) { if (why !== 'gone') { b.shun = b.prey; b.shunT = 7; events.push({ t: state.t, breakOff: [v.i, b.prey.i, why] }); } b.prey = null; b.chaseT = 0; b.seen = null; }
+    }
+    const dry = v.ammo === 0, low = v.ammo <= 2 && crate && crate.d < 45, hurtAndShort = v.hp <= 30 && v.ammo < tune.br_ammo_max / 2;
+    if (crate && (dry || low || (hurtAndShort && !b.prey))) { if (b.goal !== 'ammo' && dry) events.push({ t: state.t, seekAmmo: [v.i] }); b.goal = 'ammo'; b.crate = crate.p; b.prey = null; b.seen = null; }
+    else if (v.ammo > 0 && foes.length) {
+      let best = null, bestS = 1e9;
+      for (const o of foes) {
+        let sc = Math.hypot(o.x - v.x, o.z - v.z) + (o.shield > 0 ? 90 : 0) - (tune.br_hp - o.hp) * 0.35 - (o === b.prey ? 18 : 0) + (o === b.shun && b.shunT > 0 ? 220 : 0);
+        if (sc < bestS) { bestS = sc; best = o; }
+      }
+      if (best !== b.prey) b.chaseT = 0;
+      b.goal = 'fight'; b.prey = best;
+      b.seen = { x: best.x, z: best.z, vx: best.vx, vz: best.vz, err: (rng() - 0.5) * 2 * tune.bot_aim_error };
+    } else b.goal = 'roam';
+  }
+  if (b.goal === 'ammo' && b.crate && b.crate.wait <= 0) return navTo(v, b.crate.x, b.crate.z, b.crate.layer);
+  if (b.goal === 'fight' && b.prey && b.prey.active && b.seen) {
+    b.chaseT += STEP;
+    const p = b.prey, sn = b.seen, d = Math.hypot(p.x - v.x, p.z - v.z), flight = d / tune.br_shot_speed;
+    const ax = sn.x + sn.vx * flight, az = sn.z + sn.vz * flight;       // where the bolt should meet it, by the bot's last look
+    const sameLevel = !(p.layer && v.layer && p.layer !== v.layer) && !(p.layer === 'deck' && !v.layer && Math.abs(v.x) > CH.bridgeW);
+    if (sameLevel && d < tune.bot_fire_range * 1.4 && sightClear(v.x, v.z, p.x, p.z)) {
+      // line the shot up: turn the nose onto that spot, then fire when it is on, at a rig that can be hurt
+      const off = Math.abs(wrapA(Math.atan2(ax - v.x, az - v.z) + sn.err - v.h));
+      return { tx: ax, tz: az, aimNode: null, aimErr: sn.err, ramming: d < 14, cruise: d < 26 ? 0.55 : 1, fire: d < tune.bot_fire_range && off < 0.07 + 1.6 / Math.max(d, 6) && p.shield <= 0 };
+    }
+    return navTo(v, p.x + p.vx * 0.6, p.z + p.vz * 0.6, p.layer);
+  }
+  // nothing to do: roll on round the blocks
+  const np = b.node && nodePos(b.node);
+  if (!b.node || Math.hypot(np[0] - v.x, np[1] - v.z) < 15) {
+    const here = nearestNode(v.x, v.z), fx = Math.sin(v.h), fz = Math.cos(v.h); let best = here, bestS = -1e9;
+    for (const n of neighbours(here)) { const [nx, nz] = nodePos(n), d = Math.hypot(nx - v.x, nz - v.z) || 1, sc = ((nx - v.x) * fx + (nz - v.z) * fz) / d * 30 + neighbours(n).length * 8 + rng() * 25; if (sc > bestS) { bestS = sc; best = n; } }
+    b.node = best;
+  }
+  const [tx, tz] = nodePos(b.node);
+  return { tx, tz, aimNode: b.node, cruise: 0.75 };
+}
+
+function botDriver(v) {
+  const br = MODE === 'br', r = Math.min(state.round, 3), speedShare = br ? tune.bot_speed_br : tune['bot_speed_r' + r], turnShare = br ? 1 : tune['bot_turn_r' + r];
+  const b = v.bot, vf = v.vx * Math.sin(v.h) + v.vz * Math.cos(v.h), sp = Math.hypot(v.vx, v.vz);
+  // stuck against something: back out with the wheel turned; jammed again and again, reset onto a road
+  if (b.reverse > 0) { b.reverse -= STEP; b.escape = 1.2; return { throttle: -1, steer: b.reverseSteer, hand: false, fire: false }; }
+  b.slow = sp < 1.5 && v.stall <= 0 ? b.slow + STEP : 0; b.jamT -= STEP; if (b.jamT <= 0) b.jams = 0;
+  if (b.slow > 0.9) {
+    b.slow = 0; b.reverse = 0.8; b.reverseSteer = rng() < 0.5 ? 1 : -1; b.jams++; b.jamT = 9; b.node = null; b.way = null; events.push({ t: state.t, jam: [v.i, Math.round(v.x), Math.round(v.z), v.layer || '-'] });
+    if (b.jams >= tune.bot_jams_to_reset) { b.jams = 0; b.reverse = 0; resetOnRoad(v); events.push({ t: state.t, botReset: v.i }); }
+  }
+  let nav;
+  if (b.escape > 0) { b.escape -= STEP; const n = nearestNode(v.x, v.z), [x, z] = nodePos(n); nav = { tx: x, tz: z, aimNode: n }; }   // just backed out of a jam: make for the nearest junction before trying again
+  else nav = br ? battleBrain(v) : tagBrain(v);
+  if (nav.direct) return nav.direct;
+  let { tx, tz, aimNode } = nav; const ramming = !!nav.ramming, fire = !!nav.fire, it = state.vehicles[state.it];
+  if (aimNode && !sightClear(v.x, v.z, tx, tz)) { // something solid is in the way of that junction: get back to the nearest street first
+    const [hx, hz] = nodePos(nearestNode(v.x, v.z)); if (sightClear(v.x, v.z, hx, hz)) { tx = hx; tz = hz; }
+  }
+  if (v.layer === 'low' && Math.abs(tx) < CH.bridgeW + 4 && !(tz > CH.z0 + CH.slope && tz < CH.z1 - CH.slope)) tx = (v.x >= 0 ? 1 : -1) * (CH.bridgeW + 8);   // down on the bank: climb out beside the bridge, not into its abutment
+  if (tz > NORTH - 6) tz = NORTH - 6;                      // keep off the foot of the skyline
+  const diff = steerTo(v, tx, tz, turnShare).diff + (nav.aimErr || 0), steer = clamp(-diff * 2.4, -1, 1) * turnShare, sharp = Math.abs(diff);
+  const dAim = Math.hypot(tx - v.x, tz - v.z), cruise = nav.cruise || 1;
+  let throttle = vf > stat(v, 'top') * speedShare * cruise * (v === it ? tune.it_speed_bonus : 1) ? 0 : 1, hand = false;
+  if (!ramming) {
+    // corners: lift, then throw it in on the handbrake, the way you would
+    if (sharp > 0.5 && vf > tune.bot_corner_speed) { throttle = sharp > 0.85 ? -1 : 0; hand = sharp > 0.8 && vf > tune.bot_corner_speed + 1; }
+    if (aimNode && sharp < 0.6) { // a junction with no street straight on: brake in time, or meet the wall
+      const di = Math.round(Math.sin(v.h)), dj = Math.round(Math.cos(v.h));
+      if (!neighbours(aimNode).some(m => m[0] === aimNode[0] + di && m[1] === aimNode[1] + dj) && vf > tune.bot_corner_speed * 0.7 + dAim * 0.5) throttle = -1;
+    }
+  }
+  if (!ramming && dAim < 26 && sharp > 0.7 && vf > 8) { throttle = -1; hand = false; }   // the spot is inside its turning circle: slow right down for it, never orbit it
+  // facing the wrong way: at speed, a handbrake turn; from a crawl, a three-point turn, back then forward
+  if (sharp > 1.7 && vf > 9 && b.tp <= 0) return { throttle: 0, steer: Math.sign(steer) || 1, hand: true, fire: false };
+  if ((sharp > 2.1 && sp < 6) || (b.tp > 0 && sharp > 1.0)) {
+    b.tp += STEP; b.slow = 0; const backing = b.tp % 2.2 < 1.1, sgn = -Math.sign(diff) || 1;
+    if (b.tp > 7) { b.tp = 0; b.slow = 2; }                // it is not working: treat it as a jam
+    return { throttle: backing ? -1 : 1, steer: backing ? -sgn : sgn, hand: false, fire: false };
+  }
+  b.tp = 0;
+  return { throttle, steer, hand, fire };
+}
+function civDriver(v) { // keeps right, wanders the paved grid, pulls over for a siren
+  const c = v.civ, [ax, az] = nodePos(c.from), [bx, bz] = nodePos(c.to);
+  let dx = bx - ax, dz = bz - az; const len = Math.hypot(dx, dz) || 1; dx /= len; dz /= len;
+  if (Math.hypot(bx - v.x, bz - v.z) < 11) {
+    let opts = neighbours(c.to, true).filter(n => n[0] !== c.from[0] || n[1] !== c.from[1]); if (!opts.length) opts = [c.from];
+    c.from = c.to; c.to = opts[Math.floor(rng() * opts.length)]; return civDriver(v);
+  }
+  const sirenNear = rigs().some(o => Math.hypot(o.x - v.x, o.z - v.z) < tune.civ_pullover_range);
+  c.pulled = sirenNear;
+  const lane = sirenNear ? 6.2 : 3.6, along = (v.x - ax) * dx + (v.z - az) * dz;
+  const tx = ax + dx * (along + 9) - dz * lane, tz = az + dz * (along + 9) + dx * lane;   // right of the centre line
+  const { diff, steer } = steerTo(v, tx, tz, 1), vf = v.vx * Math.sin(v.h) + v.vz * Math.cos(v.h);
+  const want = sirenNear ? (Math.abs(diff) < 0.12 ? 0 : 3) : tune.civ_speed * (Math.abs(diff) > 0.6 ? 0.5 : 1);
+  c.stuck = (!sirenNear && Math.abs(vf) < 0.6) ? c.stuck + STEP : 0;
+  if (c.stuck > 5) placeCiv(v);
+  return { throttle: vf < want ? 0.7 : (vf > want + 1.5 ? -0.6 : 0), steer, hand: false, fire: false };
+}
+function placeCiv(v) { // somewhere out of the way, pointing down a street
+  const p = state.vehicles[ME];
+  for (let tries = 0; tries < 20; tries++) {
+    const from = [Math.floor(rng() * 5), Math.floor(rng() * 5)], opts = neighbours(from, true), to = opts[Math.floor(rng() * opts.length)];
+    const [ax, az] = nodePos(from), [bx, bz] = nodePos(to), x = (ax + bx) / 2, z = (az + bz) / 2;
+    if (z > 125 && tries < 19) continue;                    // not parked on the bridge
+    if (Math.hypot(x - p.x, z - p.z) < 70 && tries < 19) continue;
+    if (state.vehicles.some(o => o !== v && o.active && Math.hypot(o.x - x, o.z - z) < 14) && tries < 19) continue;
+    const dx = Math.sign(bx - ax), dz = Math.sign(bz - az);
+    Object.assign(v, { x: x - dz * 3.6, z: z + dx * 3.6, h: Math.atan2(dx, dz), vx: 0, vz: 0, spin: 0, layer: null });
+    v.px = v.x; v.pz = v.z; v.ph = v.h; v.civ = { from, to, stuck: 0, pulled: false }; return;
+  }
+}
+
+// ---- State ---------------------------------------------------------------------------------
+const LINES = {
+  start: ['Dispatch: {it} has Mr. Crouch. Do NOT let them hand him over.', 'Dispatch: Mr. Crouch is aboard {it}. He has notes on the driving.', 'Dispatch: you have Mr. Crouch. Our thoughts are with you.'],
+  gotHim: ['Dispatch: Mr. Crouch is now YOUR problem.', 'Dispatch: he says your siren is "a bit much".', 'Dispatch: congratulations on your new patient.'],
+  gaveHim: ['Dispatch: lovely hand-off. Now drive away. Fast.', 'Dispatch: he is {it}\'s problem now.', 'Dispatch: textbook. If the textbook was about crashing.'],
+  other: ['Dispatch: {it} has Mr. Crouch now. Look busy.', 'Dispatch: patient transferred to {it}. Loudly.'],
+  gripes: ['"Is the siren strictly necessary?"', '"I have been waiting SIX minutes."', '"My nephew drives better than this."', '"I would like to speak to the hospital."', '"You took that corner like a bin lorry."', '"Is there a quieter one of these?"', '"The bayou was RIGHT there. You missed it."'],
+};
+const say = (list, it) => { state.msg = list[Math.floor(rng() * list.length)].replace('{it}', it ? SEAT_NAMES[it.i] : ''); state.msgT = 4.5; };
+const freshBot = () => ({ slow: 0, reverse: 0, escape: 0, tp: 0, prey: null, safe: false, think: 0, dodge: 0, dodgeCool: 0, jams: 0, jamT: 0, node: null,
+  way: null, wayT: 0, wayPrey: null, react: 0, goal: 'roam', crate: null, seen: null, chaseT: 0, shun: null, shunT: 0 });
+function newVehicle(kind, i) {
+  return { kind, i, active: true, x: 0, z: 0, h: 0, y: 0, pitch: 0, vx: 0, vz: 0, px: 0, pz: 0, ph: 0, spin: 0, grip: tune.grip, drift: false, stall: 0, immune: 0, clean: 0, tags: 0,
+    layer: null, surf: 'road', inp: { throttle: 0, steer: 0, hand: false, fire: false }, bot: freshBot(), civ: null, smoke: 0,
+    hp: 100, ammo: 0, kills: 0, deaths: 0, dead: 0, shield: 0, cool: 0, hurt: 0, lastHitBy: -1 };
+}
+function reset() { // a new shift
+  seed = Number(params.get('seed')) || CONFIG.seed;
+  state = { t: 0, score: 0, gained: '', round: 1, phase: 'countdown', clock: 0, count: 0, it: 1, vehicles: [], msg: '', msgT: 0, shake: 0, flash: 0,
+    camYaw: 0, camPrev: 0, camLow: 0, fly: 0, flyFrom: [0, 0, 0], gripe: 0, gripeT: 0, totals: Array(NR).fill(0), stars: 0, lastTick: 9, roles: [0, 1, 2],
+    shots: [], pickups: [], feed: [], result: null, hitMark: 0, hurtFlash: 0, pop: '', popT: 0 };
+  for (let i = 0; i < NR; i++) state.vehicles.push(newVehicle(RIGS[i % 4], i));
+  for (let i = 0; i < MAX_CIV; i++) state.vehicles.push(newVehicle('civ', NR + i));
+  if (MODE === 'br') startBattle(); else startRound(1);
+}
+const STARTS = [ // per round: [x, z, heading] for you, then each bot in turn; and which of those starts IT
+  { at: [[0, -60, 0], [0, 60, Math.PI], [60, -60, -Math.PI / 2], [-60, -60, Math.PI / 2], [60, 60, Math.PI], [-60, 60, Math.PI], [120, 0, -Math.PI / 2], [-120, 0, Math.PI / 2]], it: 1 },   // a bot, two blocks up the street, coming for you
+  { at: [[-60, 0, Math.PI / 2], [60, 60, Math.PI], [60, 0, -Math.PI / 2], [-60, -120, 0], [0, -60, 0], [0, 120, Math.PI], [120, -60, -Math.PI / 2], [-120, 60, 0]], it: 2 },
+  { at: [[0, 60, 0], [60, 120, -Math.PI / 2], [-60, 60, Math.PI / 2], [0, 180, Math.PI / 2], [60, 0, 0], [-60, 0, 0], [120, 120, Math.PI], [-120, 120, Math.PI]], it: 0 },   // the last round opens with him aboard your rig, the bridge dead ahead
+];
+const placeCivs = () => state.vehicles.forEach((v, i) => { if (i >= NR) { v.active = i - NR < tune.civ_count; if (v.active) placeCiv(v); else { v.x = 999; v.z = 999 + i * 9; } } });
+const seats = () => state.roles.map(i => state.vehicles[i]);   // everyone in the match, wrecked or not
+function startBattle() { // Battle Royale: everyone starts armed and healthy, nobody is IT
+  state.round = 1; state.phase = 'countdown'; state.count = tune.countdown; state.clock = tune.br_time; state.lastTick = 9; state.it = -1;
+  const roles = [ME, ...botSeats()]; state.roles = roles;
+  state.vehicles.forEach((v, i) => {
+    Object.assign(v, { vx: 0, vz: 0, spin: 0, stall: 0, immune: 0, drift: false, grip: tune.grip, clean: 0, bot: freshBot(), layer: null, y: 0, pitch: 0,
+      hp: tune.br_hp, ammo: tune.br_ammo_start, kills: 0, deaths: 0, dead: 0, shield: tune.br_protect, cool: 0, hurt: 0, lastHitBy: -1 });   // everyone starts protected, as after a respawn
+    if (i < NR) { v.active = roles.includes(i); if (v.active) [v.x, v.z, v.h] = STARTS[0].at[roles.indexOf(i)]; else { v.x = 900; v.z = 900 + i * 12; } v.px = v.x; v.pz = v.z; v.ph = v.h; }
+  });
+  placeCivs();
+  state.shots = []; state.feed = []; state.result = null; state.pickups = PICKUPS.map(p => ({ ...p, wait: 0 }));
+  state.fly = 0; state.camLow = 0; state.camYaw = state.camPrev = state.vehicles[ME].h;
+  state.msg = 'Dispatch: weapons free. Most wrecks in three minutes wins.'; state.msgT = 4.5;
+}
+function startRound(n) {
+  state.round = n; state.phase = 'countdown'; state.count = tune.countdown; state.clock = tune.round_time; state.lastTick = 9;
+  const s = STARTS[(n - 1) % STARTS.length], roles = NET && NET.roles ? NET.roles : [ME, ...botSeats()]; state.roles = roles;   // in a room, the server names the seats
+  state.vehicles.forEach((v, i) => {
+    Object.assign(v, { vx: 0, vz: 0, spin: 0, stall: 0, immune: 0, drift: false, grip: tune.grip, clean: 0, bot: freshBot(), layer: null, y: 0, pitch: 0 });
+    if (i < NR) { v.active = roles.includes(i); if (v.active) [v.x, v.z, v.h] = s.at[roles.indexOf(i)]; else { v.x = 900; v.z = 900 + i * 12; } v.px = v.x; v.pz = v.z; v.ph = v.h; }
+  });
+  placeCivs(); state.shots = []; state.pickups = []; state.feed = [];
+  state.it = roles[s.it % roles.length]; state.fly = 0; state.camLow = 0; state.camYaw = state.camPrev = state.vehicles[ME].h;
+  say([LINES.start[s.it === 0 ? 2 : (n - 1) % 2]], state.vehicles[state.it]);
+}
+
+// ---- Physics -------------------------------------------------------------------------------
+function drive(v, dt) {
+  const inp = v.inp, rig = v.kind !== 'civ', surf = surfaceAt(v); v.surf = surf;
+  const share = surf === 'road' ? 1 : rig ? tune[KINDS[v.kind].stat + '_' + surf] : 0.7;   // every rig keeps its own share of speed off the pavement
+  const top = stat(v, 'top') * share * (v.i === state.it ? tune.it_speed_bonus : 1);
+  let throttle = inp.throttle, hand = inp.hand;
+  if (v.stall > 0) { v.stall -= dt; throttle = 0; hand = true; }
+  if (v.immune > 0) v.immune -= dt;
+  v.h += v.spin * dt; v.spin *= Math.exp(-3.2 * dt);
+  let fx = Math.sin(v.h), fz = Math.cos(v.h);
+  let vf = v.vx * fx + v.vz * fz;
+  if (throttle > 0) vf += stat(v, 'accel') * throttle * Math.max(0, 1 - vf / top) * dt;
+  else if (throttle < 0) { if (vf > 0.5) vf = Math.max(0, vf + tune.brake * throttle * dt); else vf = Math.max(-tune.reverse_speed, vf + stat(v, 'accel') * 0.7 * throttle * dt); }
+  else vf *= Math.exp(-tune.drag * dt);
+  if (vf > top) vf = Math.max(top, vf - tune.offroad_drag * dt);   // arriving on dirt too fast bleeds the speed off
+  const sp = Math.abs(vf), drifting = hand && sp > tune.drift_min_speed && v.stall <= 0;
+  if (hand) vf *= Math.exp(-(drifting ? 0.55 : 3) * dt);
+  const rate = tune.turn_rate * stat(v, 'turn') * Math.min(sp / tune.turn_speed_ref, 1) * (1 - tune.turn_fade * Math.min(sp / stat(v, 'top'), 1)) * (drifting ? tune.drift_turn_boost : 1);
+  v.h -= inp.steer * rate * dt * (vf >= 0 ? 1 : -1);
+  let g = tune.grip * (surf === 'road' ? 1 : v.kind === 'hum' ? tune.hum_offroad_grip : tune.offroad_grip);
+  if (v.kind === 'cop') g *= 1 - tune.cop_slide * Math.min(sp / stat(v, 'top'), 1) ** 2;            // the cruiser slides wide when it carries too much speed
+  const want = drifting ? Math.min(tune.drift_grip, g) : g;  // grip drops at once and comes back over drift_recover
+  v.grip = want < v.grip ? want : Math.min(want, v.grip + (tune.grip - tune.drift_grip) * dt / tune.drift_recover);
+  fx = Math.sin(v.h); fz = Math.cos(v.h);                   // the nose has turned; the slide has not
+  const lx = fz, lz = -fx, wl = (v.vx * lx + v.vz * lz) * Math.exp(-v.grip * dt);   // keep the sideways motion in the world, re-aim the forward part along the new nose
+  v.drift = Math.abs(wl) > 3.5;
+  v.vx = fx * vf + lx * wl; v.vz = fz * vf + lz * wl;
+  v.x += v.vx * dt; v.z += v.vz * dt;
+  if (v.i < NR && sp > 5) {
+    v.smoke -= dt;
+    if (v.smoke <= 0 && (v.drift || surf !== 'road')) { v.smoke = surf === 'water' ? 0.04 : 0.07; puff(v.x - fx * 2.4 + (rng() - 0.5) * 2, v.y + 0.5, v.z - fz * 2.4 + (rng() - 0.5) * 2, 0, surf === 'water' ? 5 : 1.6, 0, surf === 'water' ? 0.45 : 1.1, 0.6, surf === 'water' ? 0xbfefff : surf === 'dirt' && !v.drift ? 0xd9a868 : 0xffc9a0); }
+  }
+}
+function circles(v) { // three circles down the rig's length, so no corner fits between them; the fire engine collides a little smaller than it looks
+  const K = KINDS[v.kind], f = v.kind === 'fire' ? tune.fire_forgive : 1, o = K.len * 0.27 * f, r = K.wid * 0.62 * f, fx = Math.sin(v.h), fz = Math.cos(v.h);
+  return [[v.x + fx * o, v.z + fz * o, r], [v.x, v.z, r], [v.x - fx * o, v.z - fz * o, r]];
+}
+function bump(v, nx, nz, depth, bounce) { // push out along the normal and bounce
+  v.x += nx * depth; v.z += nz * depth;
+  const vn = v.vx * nx + v.vz * nz;
+  if (vn < 0) { v.vx -= (1 + bounce) * vn * nx; v.vz -= (1 + bounce) * vn * nz; v.vx *= 0.985; v.vz *= 0.985; return -vn; }
+  return 0;
+}
+function hitWorld(v) {
+  let worst = 0;
+  const extra = v.layer === 'deck' ? deckWalls : v.layer === 'low' ? lowWalls : null;
+  for (const [cx, cz, r] of circles(v)) {
+    for (const list of [walls, extra]) if (list) for (const w of list) {
+      const qx = clamp(cx, w.x0, w.x1), qz = clamp(cz, w.z0, w.z1); let dx = cx - qx, dz = cz - qz, d = Math.hypot(dx, dz);
+      if (d >= r) continue;
+      if (d < 1e-4) { // the centre is inside: out through the nearest face
+        const e = [[cx - w.x0, -1, 0], [w.x1 - cx, 1, 0], [cz - w.z0, 0, -1], [w.z1 - cz, 0, 1]].sort((a, b) => a[0] - b[0])[0];
+        worst = Math.max(worst, bump(v, e[1], e[2], e[0] + r, tune.wall_bounce));
+      } else worst = Math.max(worst, bump(v, dx / d, dz / d, r - d, tune.wall_bounce));
+    }
+    for (const p of posts) { const dx = cx - p.x, dz = cz - p.z, d = Math.hypot(dx, dz) || 1e-4; if (d < r + p.r) worst = Math.max(worst, bump(v, dx / d, dz / d, r + p.r - d, tune.wall_bounce)); }
+  }
+  if (worst > 7 && v.i < NR) crash(v, worst, v.i === ME ? 1 : 0.4);
+}
+function crash(v, speed, loud) {
+  if (REPLAY) return;
+  const power = clamp(speed / 28, 0, 1), me = state.vehicles[ME], near = clamp(1 - Math.hypot(v.x - me.x, v.z - me.z) / 90, 0, 1);
+  if (near <= 0) return;
+  crunch(power * loud * near); state.shake = Math.max(state.shake, power * loud * near * 0.9);
+  for (let i = 0; i < 5 + power * 6; i++) puff(v.x, v.y + 1.2, v.z, (rng() - 0.5) * 16, 4 + rng() * 7, (rng() - 0.5) * 16, 0.35, 0.5, i % 2 ? 0xffe14a : 0xff5e3a);
+}
+function hitVehicles() {
+  const vs = state.vehicles.filter(v => v.active);
+  for (let a = 0; a < vs.length; a++) for (let b = a + 1; b < vs.length; b++) {
+    const A = vs[a], B = vs[b];
+    if (Math.abs(A.x - B.x) > 12 || Math.abs(A.z - B.z) > 12) continue;
+    if (A.layer && B.layer && A.layer !== B.layer) continue;   // one on the bridge, one underneath
+    let closing = 0;
+    for (const [ax, az, ar] of circles(A)) for (const [bx, bz, br] of circles(B)) {
+      let nx = bx - ax, nz = bz - az; const d = Math.hypot(nx, nz) || 1e-4; if (d >= ar + br) continue;
+      nx /= d; nz /= d;
+      const ma = stat(A, 'mass'), mb = stat(B, 'mass'), over = ar + br - d, ia = 1 / ma, ib = 1 / mb;
+      A.x -= nx * over * ia / (ia + ib); A.z -= nz * over * ia / (ia + ib); B.x += nx * over * ib / (ia + ib); B.z += nz * over * ib / (ia + ib);
+      const rel = (B.vx - A.vx) * nx + (B.vz - A.vz) * nz;
+      if (rel < 0) {
+        const j = -(1 + tune.car_bounce) * rel / (ia + ib);
+        A.vx -= j * ia * nx; A.vz -= j * ia * nz; B.vx += j * ib * nx; B.vz += j * ib * nz;
+        const twist = (nx * Math.cos(B.h) - nz * Math.sin(B.h));          // off-centre hits spin the lighter one; a heavy rig barely notices
+        B.spin += clamp(twist * j * ib * 0.12, -3, 3); A.spin -= clamp((nx * Math.cos(A.h) - nz * Math.sin(A.h)) * j * ia * 0.12, -3, 3);
+        closing = Math.max(closing, -rel);
+      }
+    }
+    if (closing <= 0) continue;
+    if (closing > 4) crash(A.i === ME ? A : B, closing * 1.3, (A.i === ME || B.i === ME) ? 1 : 0.5);
+    if (MODE === 'br' && closing > tune.br_ram_min && A.i < NR && B.i < NR && state.phase === 'run') { // a hard ram hurts both, the lighter rig more
+      const ma = stat(A, 'mass'), mb = stat(B, 'mass'), base = (closing - tune.br_ram_min) * tune.br_ram_damage * 2 / (ma + mb);
+      hurt(A, base * mb, B.i, 'ram'); hurt(B, base * ma, A.i, 'ram');
+    }
+    if (MODE === 'tag' && closing >= tune.tag_min_speed && A.i < NR && B.i < NR && state.phase === 'run') {
+      if (A.i === state.it && B.immune <= 0) tag(A, B); else if (B.i === state.it && A.immune <= 0) tag(B, A);
+    }
+  }
+}
+function tag(from, to) { // the ram is the hand-off: once, then a grace before he can come back
+  state.it = to.i; from.immune = tune.tagback_grace; from.tags++;
+  to.stall = tune.tag_stall; to.spin += (rng() < 0.5 ? -1 : 1) * tune.tag_spin * Math.min(1, 1.6 / stat(to, 'mass') + 0.35); to.bot.node = null;
+  state.fly = 0.55; state.flyFrom = [from.x, from.y + meshes[from.i].userData.roof, from.z];
+  state.flash = 0.35; state.shake = Math.max(state.shake, 0.8); state.gripeT = 2.5;
+  events.push({ t: state.t, tag: [from.i, to.i] });
+  if (NET && NET.host) { NET.tagLog.push([++NET.tagN, from.i, to.i]); if (NET.tagLog.length > 8) NET.tagLog.shift(); }
+  if (to.i === ME) { say(LINES.gotHim); tone(520, 0.45, 'sawtooth', 0.3, 130); }
+  else if (from.i === ME) { say(LINES.gaveHim, to); tone(440, 0.12, 'square', 0.25); tone(660, 0.12, 'square', 0.25, 990); }
+  else say(LINES.other, to);
+}
+// ---- Battle Royale: the blaster, damage, wrecks and respawns. One set of rules for you and the bots.
+function fire(v) {
+  if (v.ammo <= 0 || v.cool > 0 || v.stall > 0 || !v.active) return false;
+  const fx = Math.sin(v.h), fz = Math.cos(v.h), nose = KINDS[v.kind].len / 2 + 1;
+  state.shots.push({ x: v.x + fx * nose, z: v.z + fz * nose, y: v.y + 1.5, vx: fx * tune.br_shot_speed, vz: fz * tune.br_shot_speed, life: tune.br_shot_life, owner: v.i, layer: v.layer });
+  v.ammo--; v.cool = tune.br_fire_cooldown; v.shield = 0;      // firing ends your protection
+  const me = state.vehicles[ME], near = clamp(1 - Math.hypot(v.x - me.x, v.z - me.z) / 110, 0, 1);
+  if (near > 0) tone(v.i === ME ? 940 : 700, 0.11, 'square', 0.05 + 0.13 * near, 180);
+  puff(v.x + fx * nose, v.y + 1.5, v.z + fz * nose, fx * 6, 1, fz * 6, 0.4, 0.15, 0xffffff);
+  return true;
+}
+function hurt(v, dmg, by, how) {
+  if (!v.active || v.dead > 0 || state.phase !== 'run' || dmg <= 0) return;
+  if (v.shield > 0) { puff(v.x, v.y + 2, v.z, 0, 6, 0, 0.4, 0.3, 0x7df0ff); return; }   // protected: the hit sparks off
+  v.hp -= dmg; v.hurt = 0.25;
+  if (by >= 0 && by !== v.i) { v.lastHitBy = by; const a = state.vehicles[by]; if (a.bot) a.bot.chaseT = 0; }
+  events.push({ t: state.t, hit: [by, v.i, how, Math.round(dmg)] });
+  for (let i = 0; i < 4; i++) puff(v.x, v.y + 1.6, v.z, (rng() - 0.5) * 14, 3 + rng() * 6, (rng() - 0.5) * 14, 0.35, 0.4, i % 2 ? 0xffe14a : 0xff5e3a);
+  if (by === ME && how === 'shot') { state.hitMark = 0.28; tone(1250, 0.06, 'square', 0.2); }
+  if (v.i === ME) { state.hurtFlash = 0.35; state.shake = Math.max(state.shake, 0.5); tone(150, 0.16, 'sawtooth', 0.25, 70); }
+  if (v.hp <= 0) wreck(v);
+}
+function wreck(v) { // one wreck, one kill: to whoever landed the last hit
+  const killer = v.lastHitBy >= 0 && v.lastHitBy !== v.i ? state.vehicles[v.lastHitBy] : null;
+  v.deaths++; v.hp = 0; v.dead = tune.br_respawn_delay; v.active = false; v.vx = v.vz = 0; v.lastHitBy = -1;
+  if (killer) killer.kills++;
+  events.push({ t: state.t, kill: [killer ? killer.i : -1, v.i] });
+  state.feed.unshift({ text: `${killer ? SEAT_NAMES[killer.i] : 'The road'} wrecked ${SEAT_NAMES[v.i]}`, t: 5, mine: v.i === ME || (killer && killer.i === ME) }); state.feed.length = Math.min(state.feed.length, 4);
+  for (let i = 0; i < 22; i++) puff(v.x + (rng() - 0.5) * 4, v.y + 1 + rng() * 2, v.z + (rng() - 0.5) * 4, (rng() - 0.5) * 22, 5 + rng() * 14, (rng() - 0.5) * 22, i < 10 ? 2.6 : 0.4, i < 10 ? 1.1 : 0.9, [0xff5e3a, 0xffe14a, 0xff2e63, 0x3a3158][i % 4]);
+  const me = state.vehicles[ME], near = clamp(1 - Math.hypot(v.x - me.x, v.z - me.z) / 140, 0, 1);
+  if (near > 0) { crunch(near); state.shake = Math.max(state.shake, near * 1.2); }
+  if (killer && killer.i === ME) { state.pop = `WRECKED ${SEAT_NAMES[v.i].toUpperCase()}!`; state.popT = 1.8; tone(523, 0.1, 'square', 0.25); tone(784, 0.25, 'square', 0.25, 1047); }
+  if (v.i === ME) { state.pop = killer ? `WRECKED BY ${SEAT_NAMES[killer.i].toUpperCase()}` : 'WRECKED'; state.popT = tune.br_respawn_delay; }
+}
+function respawn(v) { // at the junction furthest from everyone, protected for a moment
+  let best = [0, 0], bestD = -1;
+  for (let i = 0; i < 5; i++) for (let j = 0; j < 5; j++) {
+    const [x, z] = nodePos([i, j]); let d = 1e9;
+    for (const o of state.vehicles) if (o.active && o !== v) d = Math.min(d, Math.hypot(o.x - x, o.z - z));
+    for (const sh of state.shots) d = Math.min(d, Math.hypot(sh.x - x, sh.z - z) * 2);
+    if (d > bestD) { bestD = d; best = [x, z]; }
+  }
+  const h = Math.abs(best[0]) > Math.abs(best[1]) ? (best[0] > 0 ? -Math.PI / 2 : Math.PI / 2) : (best[1] > 0 ? Math.PI : 0);   // facing back into town
+  Object.assign(v, { x: best[0], z: best[1], h, px: best[0], pz: best[1], ph: h, vx: 0, vz: 0, spin: 0, stall: 0, layer: null, y: 0, pitch: 0, active: true, dead: 0,
+    hp: tune.br_hp, ammo: tune.br_ammo_start, shield: tune.br_protect, cool: 0.3, hurt: 0, lastHitBy: -1, bot: freshBot() });
+  if (v.i === ME) { state.camYaw = state.camPrev = h; state.pop = ''; state.popT = 0; tone(660, 0.2, 'square', 0.2, 990); }
+  events.push({ t: state.t, respawn: [v.i, Math.round(bestD)] });
+}
+function battleStep(dt) {
+  // bolts fly straight and level until they hit a wall, a trunk or a rig
+  for (const sh of state.shots) {
+    sh.life -= dt; sh.x += sh.vx * dt; sh.z += sh.vz * dt;
+    let gone = sh.life <= 0;
+    if (!gone && (walls.some(w => sh.x > w.x0 && sh.x < w.x1 && sh.z > w.z0 && sh.z < w.z1) || posts.some(p => Math.hypot(p.x - sh.x, p.z - sh.z) < p.r + 0.3))) { gone = true; puff(sh.x, sh.y, sh.z, 0, 4, 0, 0.4, 0.25, 0xffffff); }
+    if (!gone) for (const v of rigs()) {
+      if (v.i === sh.owner || (sh.layer && v.layer && sh.layer !== v.layer)) continue;
+      if (circles(v).some(([cx, cz, r]) => Math.hypot(cx - sh.x, cz - sh.z) < r + tune.br_shot_radius)) { hurt(v, tune.br_damage, sh.owner, 'shot'); gone = true; break; }
+    }
+    sh.gone = gone;
+  }
+  state.shots = state.shots.filter(sh => !sh.gone);
+  // crates: drive over one to load up; it comes back after a while
+  state.pickups.forEach((p, n) => {
+    if (p.wait > 0) { p.wait -= dt; return; }
+    for (const v of rigs()) if (v.ammo < tune.br_ammo_max && (v.layer || null) === p.layer && Math.hypot(v.x - p.x, v.z - p.z) < 3.8) {
+      const got = Math.min(tune.br_pickup_ammo, tune.br_ammo_max - v.ammo); v.ammo += got; p.wait = tune.br_pickup_respawn; events.push({ t: state.t, pickup: [v.i, n] });
+      if (v.i === ME) { state.pop = `+${got} AMMO`; state.popT = 1.2; tone(880, 0.07, 'square', 0.2); tone(1320, 0.12, 'square', 0.2); }
+      break;
+    }
+  });
+  for (const f of state.feed) f.t -= dt; state.feed = state.feed.filter(f => f.t > 0);
+  for (const v of seats()) if (v.dead > 0) { v.dead -= dt; if (v.dead <= 0) respawn(v); }
+  state.score = state.vehicles[ME].kills;
+  state.clock -= dt;
+  if (state.clock <= 10 && Math.ceil(state.clock) < state.lastTick) { state.lastTick = Math.ceil(state.clock); tone(600, 0.08, 'square', 0.15); }
+  if (state.clock <= 0) endBattle();
+}
+function endBattle() { // the buzzer: scoring stops here
+  state.clock = 0; state.phase = 'done'; state.shots = [];
+  const rows = seats().map(v => ({ i: v.i, kills: v.kills, deaths: v.deaths })).sort((a, b) => b.kills - a.kills || a.deaths - b.deaths || a.i - b.i);
+  for (const r of rows) r.place = 1 + rows.filter(o => o.kills > r.kills).length;
+  const leaders = rows.filter(r => r.place === 1), draw = leaders.length > 1;
+  state.result = { rows, draw, leaders: leaders.map(r => r.i) };
+  state.gained = draw ? `Draw: ${leaders.map(r => SEAT_NAMES[r.i]).join(' and ')} tie on ${leaders[0].kills} wreck${leaders[0].kills === 1 ? '' : 's'}`
+    : `${leaders[0].i === ME ? 'You win' : SEAT_NAMES[leaders[0].i] + ' wins'} with ${leaders[0].kills} wreck${leaders[0].kills === 1 ? '' : 's'}`;
+  scene = 'brResults'; [523, 659, 784].forEach((f, i) => setTimeout(() => tone(f, 0.3, 'square', 0.2), i * 140));
+}
+function resetOnRoad(v) { // back on the nearest street, facing along it
+  const n = nearestNode(v.x, v.z), [nx, nz] = nodePos(n), alongX = Math.abs(v.x - nx) > Math.abs(v.z - nz);
+  if (alongX) { v.z = nz; v.x = clamp(v.x, -120, 120); v.h = Math.sin(v.h) >= 0 ? Math.PI / 2 : -Math.PI / 2; }
+  else {
+    v.x = nx; v.z = clamp(v.z, -120, 180); v.h = Math.cos(v.h) >= 0 ? 0 : Math.PI;
+    if (v.z > 126 && v.z < 174 && nx !== 0) { v.z = v.z < 150 ? 120 : 180; v.h = v.x > 0 ? -Math.PI / 2 : Math.PI / 2; }   // only the bridge is a street over the bayou
+  }
+  v.layer = v.z > CH.z0 && v.z < CH.z1 ? 'deck' : null;
+  v.vx = v.vz = v.spin = 0; v.stall = tune.reset_stall; v.px = v.x; v.pz = v.z; v.ph = v.h;
+}
+
+function layerOf(v) { // on the bridge or down on the bank: decided as a rig enters the bayou, kept until it leaves
+  if (!(v.z > CH.z0 && v.z < CH.z1)) v.layer = null; else if (!v.layer) v.layer = Math.abs(v.x) < CH.bridgeW ? 'deck' : 'low';
+}
+function groundAll() { // the ground under each rig: flat on the streets and the bridge, sloping down the banks
+  for (const v of state.vehicles) {
+    if (!v.active) continue;
+    const half = KINDS[v.kind].len * 0.32, fz = Math.cos(v.h), low = v.layer === 'low' || (!v.layer && Math.abs(v.x) >= CH.bridgeW);   // lined up with the bridge, a rig stays level
+    const yf = low ? bankY(v.z + fz * half) : 0, yb = low ? bankY(v.z - fz * half) : 0;
+    v.y = (yf + yb) / 2; v.pitch = Math.atan2(yb - yf, half * 2);
+  }
+}
+function playStep(dt) {
+  state.t += dt;
+  const vs = state.vehicles, br = MODE === 'br';
+  for (const v of vs) { v.px = v.x; v.pz = v.z; v.ph = v.h; }
+  state.camPrev = state.camYaw;
+  if (state.msgT > 0) state.msgT -= dt;
+  state.shake *= Math.exp(-6 * dt); if (state.flash > 0) state.flash -= dt; if (state.fly > 0) state.fly -= dt;
+  if (state.hitMark > 0) state.hitMark -= dt; if (state.hurtFlash > 0) state.hurtFlash -= dt; if (state.popT > 0) state.popT -= dt;
+  if (state.phase === 'countdown') {
+    state.count -= dt;
+    const beep = Math.ceil(state.count * 3 / Math.max(tune.countdown, 0.01));
+    if (beep < state.lastTick && state.count > 0) { state.lastTick = beep; tone(440, 0.12, 'square', 0.2); }
+    if (state.count <= 0) { state.phase = 'run'; tone(880, 0.35, 'square', 0.25); }
+  } else {
+    if (pressed('KeyR') && vs[ME].active && !NET) resetOnRoad(vs[ME]);
+    for (const v of vs) { if (!v.active) continue; v.inp = v.i >= NR ? civDriver(v) : NET && NET.host ? hostDriver(v) : v.i === ME ? humanDriver() : botDriver(v); }
+    for (const v of vs) if (v.active) drive(v, dt);
+    if (br) for (const v of rigs()) { if (v.cool > 0) v.cool -= dt; if (v.shield > 0) v.shield -= dt; if (v.hurt > 0) v.hurt -= dt; if (v.inp.fire) fire(v); }
+    hitVehicles();
+    for (const v of vs) if (v.active) hitWorld(v);
+    for (const v of vs) if (v.active) layerOf(v);
+    if (br) battleStep(dt);
+    else {
+      for (const v of rigs()) if (v.i !== state.it) v.clean += dt;
+      state.score = Math.floor(state.totals[ME] + vs[ME].clean);
+      if (state.it === ME) { state.gripeT -= dt; if (state.gripeT <= 0) { state.gripeT = 4.2; state.gripe = (state.gripe + 1) % LINES.gripes.length; } }
+      state.clock -= dt;
+      if (state.clock <= 10 && Math.ceil(state.clock) < state.lastTick) { state.lastTick = Math.ceil(state.clock); tone(state.it === ME ? 300 : 600, 0.08, 'square', 0.15); }
+      if (state.clock <= 0) endRound();
+    }
+  }
+  groundAll();
+  const p = vs[ME];                                          // the view swings round behind you, and drops low under the bridge
+  state.camYaw += wrapA(p.h - state.camYaw) * Math.min(1, tune.cam_turn * dt);
+  state.camLow += ((p.layer === 'low' && Math.abs(p.x) < CH.bridgeW + 16 ? 1 : 0) - state.camLow) * Math.min(1, 5 * dt);
+  for (const q of puffs) if (q.life > 0) { q.life -= dt; q.x += q.vx * dt; q.y += q.vy * dt; q.z += q.vz * dt; q.vy -= (q.size < 0.5 ? 18 : 0) * dt; }
+}
+function endRound() {
+  const vs = state.vehicles; state.clock = 0;
+  if (liveHuman(state.it)) { // a person stuck with him at the buzzer: this round again, for everyone, not the shift
+    state.gained = 'Round ' + state.round + ' lost: Mr. Crouch is still aboard your rig'; scene = 'over'; tone(300, 0.6, 'sawtooth', 0.3, 80); return;
+  }
+  for (let i = 0; i < NR; i++) if (vs[i].active) state.totals[i] += vs[i].clean;
+  if (state.round >= tune.rounds) {
+    const share = state.totals[ME] / (tune.rounds * tune.round_time);
+    state.stars = clamp(2 + Math.floor((share - tune.star_base) / tune.star_step), 1, 5);
+    state.score = Math.floor(state.totals[ME]);
+    state.gained = `Shift over: ${state.stars} of 5 stars of public trust`;
+    scene = 'results'; [523, 659, 784, 1047].forEach((f, i) => setTimeout(() => tone(f, 0.3, 'square', 0.2), i * 140));
+  } else { scene = 'between'; tone(660, 0.3, 'square', 0.2, 990); }
+}
+
+// ---- Drawing -------------------------------------------------------------------------------
+const v3 = new THREE.Vector3();
+function place(alpha) { // meshes follow the simulation, between the last two steps
+  const br = MODE === 'br';
+  for (const v of state.vehicles) {
+    const m = meshes[v.i]; m.visible = v.active; if (!v.active) continue;
+    let x = lerp(v.px, v.x, alpha), z = lerp(v.pz, v.z, alpha), h = v.ph + wrapA(v.h - v.ph) * alpha;
+    if (NET && NET.client && v.i === ME) { x += net.ex; z += net.ez; h += net.eh; }   // a server correction to your own rig is eased in, never snapped
+    const side = (v.vx * Math.cos(v.h) - v.vz * Math.sin(v.h));
+    m.position.set(x, v.y, z); m.rotation.set(v.pitch * Math.cos(v.h), h, clamp(side * 0.02, -0.16, 0.16));   // a little body roll in a slide
+    m.scale.setScalar(br && v.hurt > 0 ? 1 + v.hurt * 0.5 : 1);                                              // a hit makes the rig jolt
+    const on = Math.floor(state.t * 7) % 2, amber = m.userData.amber;
+    m.userData.lights.forEach((l, i) => l.material.color.set(amber ? (i === on ? 0xffc400 : 0x553f00) : i === on ? (i ? 0x6fa0ff : 0xff5060) : (i ? 0x0a1c55 : 0x55060c)));
+    if (v.i < NR) { // a ring under a rig that cannot be touched yet: green for no tag-backs, blue for a fresh respawn
+      const r = safeRings[v.i], left = br ? v.shield / tune.br_protect : v.immune / tune.tagback_grace; r.visible = left > 0;
+      if (r.visible) { r.material.color.set(br ? 0x7df0ff : 0x7dff5a); r.position.set(x, v.y + 0.25, z); r.scale.setScalar(0.75 + 0.35 * left + 0.05 * Math.sin(state.t * 16)); r.material.opacity = 0.35 + 0.55 * left; }
+    }
+  }
+  safeRings.forEach((r, i) => { if (!state.vehicles[i].active) r.visible = false; });
+  crateMeshes.forEach((g, n) => { const p = state.pickups[n]; g.visible = br && !!p && p.wait <= 0; if (g.visible) { g.rotation.y = state.t * 1.6 + n; g.position.y = g.userData.y + Math.sin(state.t * 3 + n) * 0.25; } });
+  boltMeshes.forEach((m, n) => { const sh = br && state.shots[n]; m.visible = !!sh; if (sh) { m.position.set(sh.x, sh.y, sh.z); m.rotation.y = Math.atan2(sh.vx, sh.vz); m.material.color.set(sh.owner === ME ? 0x7df0ff : 0xff6ab0); } });
+  const tagOn = state.it >= 0; patient.visible = marker.visible = tagOn;
+  if (tagOn) {
+    const it = state.vehicles[state.it], im = meshes[state.it];
+    let px = im.position.x, py = im.position.y + im.userData.roof, pz = im.position.z;
+    if (state.fly > 0) { const k = 1 - state.fly / 0.55; px = lerp(state.flyFrom[0], px, k); pz = lerp(state.flyFrom[2], pz, k); py = lerp(state.flyFrom[1], py, k) + Math.sin(k * Math.PI) * 9; patient.rotation.x = k * Math.PI * 4; } else patient.rotation.x = 0;
+    patient.position.set(px, py, pz); patient.rotation.y = im.rotation.y;
+    fist.rotation.z = -0.5 + Math.sin(state.t * 14) * 0.5;
+    const sp = Math.hypot(it.vx, it.vz), pos = gown.geometry.attributes.position;
+    for (let i = 0; i < pos.count; i++) { const back = -pos.getZ(i); pos.setY(i, Math.sin(state.t * (9 + sp * 0.4) - back * 2.2) * 0.13 * back * (0.4 + Math.min(sp / 14, 1)) - back * 0.05 * Math.max(0, 1 - sp / 6)); }
+    pos.needsUpdate = true;
+    const bob = Math.sin(state.t * 5) * 0.5; marker.position.set(px, py + (state.it === ME ? 3.6 : 6.5) + bob, pz);   // lower over your own roof, so it stays in view
+    const far = Math.hypot(px - cam.position.x, pz - cam.position.z), ms = state.it === ME ? 2.6 : clamp(far * 0.085, 5, 16); marker.scale.set(ms, ms, 1);
+  }
+  for (const q of puffs) { if (q.life <= 0) { q.m.visible = false; continue; } const k = q.life / q.max, s = q.size * (q.size < 0.5 ? 1 : 2.4 - k * 1.4); q.m.position.set(q.x, q.y, q.z); q.m.scale.set(s, s, s); q.m.rotation.set(q.x, q.y * 3, q.z); q.m.material.opacity = k * 0.8; }
+}
+function render() {
+  horizon.position.set(cam.position.x, 0, cam.position.z);
+  const p = meshes[ME].position; sun.target.position.set(p.x, 0, p.z); sun.position.set(p.x + SUN_DIR.x * 190, SUN_DIR.y * 190, p.z + SUN_DIR.z * 190);
+  renderer.render(scene3, cam);
+}
+function chaseCam(alpha) {
+  const p = meshes[ME].position, v = state.vehicles[ME], yaw = state.camPrev + wrapA(state.camYaw - state.camPrev) * alpha;
+  const sp = Math.hypot(v.vx, v.vz), fx = Math.sin(yaw), fz = Math.cos(yaw);
+  const sh = state.shake * tune.shake, jx = Math.sin(state.t * 91) * sh, jy = Math.cos(state.t * 77) * sh;
+  cam.fov = tune.cam_fov + tune.cam_fov_speed * Math.min(sp / stat(v, 'top'), 1.15); cam.updateProjectionMatrix();   // the view widens with speed
+  const big = Math.pow(KINDS[v.kind].len / KINDS.amb.len, 0.8);   // a longer rig gets a camera further back
+  const cd = lerp(tune.cam_dist * big, tune.cam_low_dist, state.camLow), chh = lerp(tune.cam_height * big, tune.cam_low_height, state.camLow);
+  let k = 1;                                                // pull the camera in until it is clear of every building
+  for (; k > 0.3; k -= 0.1) { const cx = p.x - fx * cd * k, cz = p.z - fz * cd * k; if (!walls.some(w => cx > w.x0 - 1.2 && cx < w.x1 + 1.2 && cz > w.z0 - 1.2 && cz < w.z1 + 1.2)) break; }
+  cam.position.set(p.x - fx * cd * k + jx, p.y + chh * (0.55 + 0.45 * k) + jy, p.z - fz * cd * k);
+  cam.lookAt(p.x + fx * 7, p.y + 2.4, p.z + fz * 7);
+}
+function toScreen(x, y, z) { v3.set(x, y, z).project(cam); return { x: W / 2 + v3.x * (W / 2 + EX), y: H / 2 - v3.y * (H / 2 + EY), behind: v3.z > 1 }; }
+function icon(kind, x, y, s, isIt) { // a drawn pip for each vehicle, its own shape
+  ctx.save(); ctx.translate(x, y);
+  if (isIt) { ctx.fillStyle = PAL.it; ctx.beginPath(); ctx.arc(0, 0, s * 1.6, 0, 7); ctx.fill(); }
+  ctx.fillStyle = KINDS[kind].hud; ctx.strokeStyle = PAL.ink; ctx.lineWidth = 2;
+  ctx.beginPath();
+  if (kind === 'amb') { ctx.rect(-s * 0.8, -s, s * 1.6, s * 2); }
+  else if (kind === 'fire') { ctx.rect(-s * 0.65, -s * 1.3, s * 1.3, s * 2.6); }
+  else if (kind === 'cop') { ctx.moveTo(0, -s * 1.2); ctx.lineTo(s, 0); ctx.lineTo(0, s * 1.2); ctx.lineTo(-s, 0); ctx.closePath(); }
+  else if (kind === 'hum') { for (let i = 0; i < 8; i++) { const a = Math.PI / 8 + i * Math.PI / 4; ctx.lineTo(Math.cos(a) * s * 1.15, Math.sin(a) * s * 1.15); } ctx.closePath(); }
+  else { ctx.arc(0, 0, s * 0.55, 0, 7); }
+  ctx.fill(); ctx.stroke();
+  if (kind === 'amb') { ctx.fillStyle = '#ff3b30'; ctx.fillRect(-s * 0.15, -s * 0.55, s * 0.3, s * 1.1); ctx.fillRect(-s * 0.55, -s * 0.15, s * 1.1, s * 0.3); }
+  if (kind === 'hum') { ctx.fillStyle = PAL.ink; ctx.fillRect(-s * 0.6, -s * 0.14, s * 1.2, s * 0.28); }
+  ctx.restore();
+}
+const fmt = s => s.toFixed(1), phoneHud = () => touch.on || viewW < 900;
+function minimap(mx, my, ms) {
+  const k = ms / (NORTH + EDGE), wpx = 2 * EDGE * k, mp = (x, z) => [mx + wpx / 2 - x * k, my + (NORTH - z) * k];
+  panel(mx - 6, my - 6, wpx + 12, ms + 12);
+  ctx.fillStyle = '#1fa8e8'; { const [ax, az] = mp(EDGE, CH.w1 + 4); ctx.fillRect(ax, az, wpx, (CH.w1 - CH.w0 + 8) * k); }                 // the bayou
+  ctx.fillStyle = '#e0cfa0'; { const [ax, az] = mp(CH.fordX + CH.fordW, CH.z1); ctx.fillRect(ax, az, CH.fordW * 2 * k, (CH.z1 - CH.z0) * k); }   // the dirt crossing
+  ctx.fillStyle = '#f2f2ff'; { const [ax, az] = mp(CH.bridgeW, CH.z1); ctx.fillRect(ax, az, CH.bridgeW * 2 * k, (CH.z1 - CH.z0) * k); }           // the bridge
+  ctx.fillStyle = '#6a5a9a';
+  for (const w of walls) { if (w.x1 - w.x0 > 100 || w.z1 - w.z0 > 100) continue; const [ax, az] = mp(w.x1, w.z1); ctx.fillRect(ax, az, (w.x1 - w.x0) * k, (w.z1 - w.z0) * k); }
+  if (MODE === 'br') { ctx.fillStyle = '#ffe14a'; for (const p of state.pickups) if (p.wait <= 0) { const [ax, az] = mp(p.x, p.z); ctx.fillRect(ax - 2.5, az - 2.5, 5, 5); } }   // ammo crates
+  const vs = state.vehicles;
+  for (let i = vs.length - 1; i >= 0; i--) { const v = vs[i]; if (!v.active) continue; const [ax, az] = mp(v.x, v.z); icon(v.kind, ax, az, i < NR ? 6 : 3.5, i === state.it); }
+}
+function brHud() { // Battle Royale: clock, wrecks, your health and ammo, rivals' health, where your bolts go
+  const vs = state.vehicles, me = vs[ME], PH = phoneHud(), S = seats();
+  const c = Math.max(0, state.clock), urgent = c <= 10, clockText = `${Math.floor(c / 60)}:${String(Math.floor(c % 60)).padStart(2, '0')}`;
+  for (const v of rigs()) { // each rival's health, over its roof
+    if (v === me) continue; const d = Math.hypot(v.x - me.x, v.z - me.z); if (d > 150) continue;
+    const s = toScreen(v.x, v.y + meshes[v.i].userData.roof + 2.4, v.z); if (s.behind || s.x < 0 || s.x > W || s.y < 0) continue;
+    const w = clamp(900 / d, 28, 92) * (PH ? 1.3 : 1), h = PH ? 10 : 7;
+    panel(s.x - w / 2 - 2, s.y - 2, w + 4, h + 4, 'rgba(20,12,48,0.85)'); panel(s.x - w / 2, s.y, w * clamp(v.hp / tune.br_hp, 0, 1), h, v.shield > 0 ? '#7df0ff' : v.hp > 50 ? '#7dff5a' : v.hp > 25 ? '#ffe14a' : '#ff5060');
+  }
+  if (me.active) { // a sight where your bolts will go, and a cross on it when one lands
+    const f = toScreen(me.x + Math.sin(me.h) * 45, me.y + 1.5, me.z + Math.cos(me.h) * 45);
+    if (!f.behind) {
+      ctx.strokeStyle = me.ammo > 0 ? 'rgba(125,240,255,0.95)' : 'rgba(255,255,255,0.35)'; ctx.lineWidth = 3;
+      ctx.beginPath(); ctx.arc(f.x, f.y, 13, 0, 7); ctx.moveTo(f.x - 22, f.y); ctx.lineTo(f.x - 7, f.y); ctx.moveTo(f.x + 7, f.y); ctx.lineTo(f.x + 22, f.y); ctx.stroke();
+      if (state.hitMark > 0) { ctx.strokeStyle = '#fff'; ctx.lineWidth = 5; ctx.beginPath(); for (const [a, b] of [[-1, -1], [1, -1], [-1, 1], [1, 1]]) { ctx.moveTo(f.x + a * 10, f.y + b * 10); ctx.lineTo(f.x + a * 26, f.y + b * 26); } ctx.stroke(); }
+    }
+  }
+  const status = !me.active ? `WRECKED: BACK IN ${Math.max(0, me.dead).toFixed(1)} s` : me.shield > 0 ? `PROTECTED ${me.shield.toFixed(1)} s (ENDS IF YOU FIRE)` : me.ammo === 0 ? 'NO AMMO: GRAB A YELLOW CRATE' : '';
+  const statusBg = !me.active ? 'rgba(160,20,60,0.92)' : me.shield > 0 ? 'rgba(20,90,120,0.92)' : 'rgba(255,225,74,0.96)', statusInk = !me.active || me.shield > 0 ? '#fff' : PAL.ink;
+  const hpBar = (x, y, w, h, fs) => { panel(x - 3, y - 3, w + 6, h + 6); panel(x, y, w * clamp(me.hp / tune.br_hp, 0, 1), h, me.hp > 50 ? '#3fbf3a' : me.hp > 25 ? '#d9a800' : '#e0304a'); text(`HEALTH ${Math.max(0, Math.ceil(me.hp))}`, x + w / 2, y + h / 2 + 1, fs, '#fff'); };
+  if (PH) { // a phone: fewer things, much bigger, all at the top so the thumbs own the bottom
+    panel(W / 2 - 120, 8, 240, 92, urgent ? 'rgba(160,20,60,0.92)' : undefined);
+    text(clockText, W / 2, 46, 62, '#fff'); text('BATTLE ROYALE', W / 2, 84, 20, '#ffe14a');
+    hpBar(W / 2 - 398, 111, 500, 38, 26); panel(W / 2 + 112, 108, 288, 44); text(`AMMO ${me.ammo}`, W / 2 + 256, 131, 30, me.ammo ? '#7df0ff' : '#ff6a8a');
+    const line = status || (state.feed[0] ? state.feed[0].text : state.msgT > 0 ? state.msg : '');
+    if (line) { panel(W / 2 - 400, 158, 800, 44, status ? statusBg : undefined); text(line, W / 2, 180, 24, status ? statusInk : '#fff'); }
+    const rh = S.length > 5 ? 31 : 44, fs = S.length > 5 ? 22 : 28;
+    panel(12, 8, 196, 14 + S.length * rh);
+    S.forEach((v, n) => { const y = 8 + rh * 0.62 + n * rh; ctx.globalAlpha = v.active ? 1 : 0.4; icon(v.kind, 40, y, rh > 40 ? 11 : 8, false); ctx.globalAlpha = 1; text(v.i === ME ? 'YOU' : '', 66, y, rh > 40 ? 20 : 17, '#ffe14a', 'left'); text(`${v.kills}`, 198, y, fs, v.i === ME ? PAL.it : '#fff', 'right'); });
+    minimap(W - 150, 14, 176);
+  } else {
+    panel(W / 2 - 96, 14, 192, 62, urgent ? 'rgba(160,20,60,0.9)' : undefined);
+    text(clockText, W / 2, 40, 38, '#fff'); text('BATTLE ROYALE', W / 2, 66, 14, '#ffe14a');
+    panel(16, 14, 300, 38 + S.length * 28); text('WRECKS / LOSSES', 30, 31, 15, '#ffe14a', 'left');
+    S.forEach((v, n) => { const y = 58 + n * 28; ctx.globalAlpha = v.active ? 1 : 0.4; icon(v.kind, 40, y, 8, false); text(who(v.i), 60, y, 17, v.i === ME ? PAL.it : '#fff', 'left'); ctx.globalAlpha = 1; text(`${v.kills} / ${v.deaths}`, 304, y, 17, '#fff', 'right'); });
+    minimap(W - 148, 16, 172);
+    state.feed.slice(0, 3).forEach((f, n) => { panel(W - 330, 204 + n * 30, 314, 26, f.mine ? 'rgba(255,225,74,0.92)' : undefined); text(f.text, W - 22, 217 + n * 30, 15, f.mine ? PAL.ink : '#fff', 'right'); });
+    hpBar(W / 2 - 300, H - 60, 380, 30, 18); panel(W / 2 + 96, H - 63, 207, 36); text(`AMMO ${me.ammo}`, W / 2 + 200, H - 44, 22, me.ammo ? '#7df0ff' : '#ff6a8a');
+    if (status) { panel(W / 2 - 300, H - 118, 600, 46, statusBg); text(status, W / 2, H - 94, 22, statusInk); }
+    if (state.msgT > 0) { ctx.globalAlpha = Math.min(1, state.msgT * 2); panel(W / 2 - 400, 92, 800, 40); text(state.msg, W / 2, 112, 20, '#fff'); ctx.globalAlpha = 1; }
+  }
+  if (state.popT > 0 && state.pop) { const y = PH ? 250 : 190, fs = PH ? 44 : 36; text(state.pop, W / 2 + 3, y + 3, fs, PAL.ink); text(state.pop, W / 2, y, fs, PAL.it); }
+  if (me.active && me.ammo === 0) { // out of ammo: an arrow to the nearest crate
+    const cr = nearestCrate(me);
+    if (cr) { const s = toScreen(cr.p.x, 2, cr.p.z); let dx = s.x - W / 2, dy = s.y - H / 2; if (s.behind) { dx = -dx; dy = Math.abs(dy) + 200; }
+      if (s.behind || s.x < 40 || s.x > W - 40 || s.y < 40 || s.y > H - 40) { const a = Math.atan2(dy, dx), ex = clamp(W / 2 + Math.cos(a) * 900, PH ? 270 : 70, W - (PH ? 250 : 70)), ey = clamp(H / 2 + Math.sin(a) * 900, PH ? 230 : 160, H - 150);
+        ctx.save(); ctx.translate(ex, ey); ctx.rotate(a); ctx.fillStyle = PAL.it; ctx.strokeStyle = PAL.ink; ctx.lineWidth = 4; ctx.beginPath(); ctx.moveTo(30, 0); ctx.lineTo(-16, -22); ctx.lineTo(-6, 0); ctx.lineTo(-16, 22); ctx.closePath(); ctx.stroke(); ctx.fill(); ctx.restore(); } }
+  }
+  if (touch.on) touchHud();
+  if (state.phase === 'countdown') { const n = Math.ceil(state.count * 3 / Math.max(tune.countdown, 0.01)); panel(W / 2 - 90, H / 2 - 110, 180, 120); text(String(clamp(n, 1, 3)), W / 2, H / 2 - 50, 96, PAL.it); }
+  if (state.hurtFlash > 0) { ctx.fillStyle = `rgba(255,40,70,${Math.min(0.75, state.hurtFlash * 2)})`; ctx.fillRect(0, 0, W, 46); ctx.fillRect(0, H - 46, W, 46); ctx.fillRect(0, 46, 46, H - 92); ctx.fillRect(W - 46, 46, 46, H - 92); }   // a red frame when you are hit
+}
+function hud() {
+  if (MODE === 'br') return brHud();
+  const vs = state.vehicles, it = vs[state.it], me = vs[ME], youIt = state.it === ME, PH = phoneHud(), R = rigs();
+  const c = Math.max(0, state.clock), urgent = c <= 10, clockText = `${Math.floor(c / 60)}:${String(Math.floor(c % 60)).padStart(2, '0')}`;
+  const dIt = Math.hypot(it.x - me.x, it.z - me.z), status = youIt ? "YOU'RE IT: RAM SOMEONE!" : `RUN! ${SEAT_NAMES[it.i].toUpperCase()} HAS HIM  ${Math.round(dIt)} m`;
+  const sub = youIt ? 'Mr. Crouch: ' + LINES.gripes[state.gripe] : me.immune > 0 ? `You are safe: no tag-backs for ${me.immune.toFixed(1)} s` : '';
+  if (PH) { // a phone: fewer things, much bigger, all at the top so the thumbs own the bottom
+    panel(W / 2 - 120, 8, 240, 92, urgent ? 'rgba(160,20,60,0.92)' : undefined);
+    text(clockText, W / 2, 46, 62, '#fff'); text(`ROUND ${state.round} OF ${tune.rounds}`, W / 2, 84, 20, '#ffe14a');
+    if (state.phase === 'run') {
+      panel(W / 2 - 400, 108, 800, 60, youIt ? 'rgba(255,225,74,0.96)' : dIt < 40 ? 'rgba(160,20,60,0.9)' : undefined); text(status, W / 2, 139, 34, youIt ? PAL.ink : '#fff');
+      const line = state.msgT > 0 ? state.msg : sub; if (line) { panel(W / 2 - 400, 172, 800, 40); text(line, W / 2, 192, 24, me.immune > 0 && state.msgT <= 0 ? '#7dff5a' : '#fff'); }
+    }
+    const rh = R.length > 5 ? 31 : 44, fs = R.length > 5 ? 22 : 28;   // a full field gets tighter rows
+    panel(12, 8, 196, 14 + R.length * rh);
+    R.forEach((v, n) => { const y = 8 + rh * 0.62 + n * rh, isIt = v.i === state.it; icon(v.kind, 40, y, rh > 40 ? 11 : 8, isIt); text(v.i === ME ? 'YOU' : v.immune > 0 ? 'SAFE' : '', 66, y, rh > 40 ? 20 : 17, v.immune > 0 && v.i !== ME ? '#7dff5a' : '#ffe14a', 'left'); text(fmt(state.totals[v.i] + v.clean), 198, y, fs, isIt ? PAL.it : '#fff', 'right'); });
+    minimap(W - 150, 14, 176);
+  } else {
+    panel(W / 2 - 86, 14, 172, 62, urgent ? 'rgba(160,20,60,0.9)' : undefined);
+    text(clockText, W / 2, 40, 38, '#fff'); text(`ROUND ${state.round} OF ${tune.rounds}`, W / 2, 66, 14, '#ffe14a');
+    panel(16, 14, 300, 38 + R.length * 28); text('SECONDS CLEAN', 30, 31, 15, '#ffe14a', 'left');
+    R.forEach((v, n) => {
+      const y = 58 + n * 28, isIt = v.i === state.it;
+      icon(v.kind, 40, y, 8, isIt); text(who(v.i), 60, y, 17, isIt ? PAL.it : '#fff', 'left');
+      if (v.immune > 0) text('SAFE ' + v.immune.toFixed(1), 232, y, 14, '#7dff5a', 'right');
+      text(fmt(state.totals[v.i] + v.clean), 304, y, 17, '#fff', 'right');
+    });
+    minimap(W - 148, 16, 172);
+    if (state.phase === 'run') {
+      panel(W / 2 - 300, H - 118, 600, 50, youIt ? 'rgba(255,225,74,0.95)' : undefined); text(status, W / 2, H - 92, youIt ? 30 : 24, youIt ? PAL.ink : dIt < 40 ? '#ff6a8a' : '#fff');
+      if (sub) text(sub, W / 2, H - 46, 20, youIt ? '#fff' : '#7dff5a');
+    }
+    if (state.msgT > 0) { ctx.globalAlpha = Math.min(1, state.msgT * 2); panel(W / 2 - 400, 92, 800, 40); text(state.msg, W / 2, 112, 20, '#fff'); ctx.globalAlpha = 1; }
+    const kmh = Math.round(Math.hypot(me.vx, me.vz) * 3.6), off = me.surf !== 'road';
+    panel(16, H - 62, off ? 250 : 150, 46); text(kmh + ' km/h', 91, H - 39, 24, '#fff'); if (off) text(me.surf.toUpperCase(), 206, H - 39, 18, me.surf === 'water' ? '#7fd8ff' : '#e0b070');
+  }
+  // an arrow at the edge of the screen: to IT, or to your nearest target
+  let target = it;
+  if (youIt) { target = null; let bd = 1e9; for (const o of R) { if (o === me) continue; const d = Math.hypot(o.x - me.x, o.z - me.z) + (o.immune > 0 ? 500 : 0); if (d < bd) { bd = d; target = o; } } }
+  const s = toScreen(target.x, target.y + 3, target.z), top = PH ? 230 : 160;
+  if (s.behind || s.x < 40 || s.x > W - 40 || s.y < 40 || s.y > H - 40) {
+    let dx = s.x - W / 2, dy = s.y - H / 2; if (s.behind) { dx = -dx; dy = Math.abs(dy) + 200; }
+    const a = Math.atan2(dy, dx), ex = clamp(W / 2 + Math.cos(a) * 900, PH ? 270 : 70, W - (PH ? 250 : 70)), ey = clamp(H / 2 + Math.sin(a) * 900, top, H - 150), big = PH ? 1.5 : 1;
+    ctx.save(); ctx.translate(ex, ey); ctx.rotate(a); ctx.scale(big, big); ctx.fillStyle = youIt ? '#fff' : PAL.it; ctx.strokeStyle = PAL.ink; ctx.lineWidth = 4;
+    ctx.beginPath(); ctx.moveTo(30, 0); ctx.lineTo(-16, -22); ctx.lineTo(-6, 0); ctx.lineTo(-16, 22); ctx.closePath(); ctx.stroke(); ctx.fill(); ctx.restore();
+    icon(target.kind, ex - Math.cos(a) * 40 * big, ey - Math.sin(a) * 40 * big, 9 * big, target === it);
+  }
+  if (touch.on) touchHud();
+  if (state.phase === 'countdown') { const n = Math.ceil(state.count * 3 / Math.max(tune.countdown, 0.01)); panel(W / 2 - 90, H / 2 - 110, 180, 120); text(String(clamp(n, 1, 3)), W / 2, H / 2 - 50, 96, PAL.it); }
+  if (NET && NET.client) netHud(PH);
+  if (state.flash > 0) { ctx.fillStyle = `rgba(255,225,74,${state.flash * 1.2})`; ctx.fillRect(-EX, -EY, W + 2 * EX, H + 2 * EY); }
+}
+function touchHud() { // the thumb controls, drawn: a round directional pad on the left, buttons on the right
+  const ring = (x, y, r, fill, line) => { ctx.beginPath(); ctx.arc(x, y, r, 0, 7); ctx.fillStyle = fill; ctx.fill(); ctx.lineWidth = 4; ctx.strokeStyle = line; ctx.stroke(); };
+  for (const k in btns()) { const b = btns()[k], on = touchHeld(k); ring(b.x, b.y, b.r, on ? 'rgba(255,225,74,0.9)' : 'rgba(20,12,48,0.6)', on ? PAL.ink : '#fff'); text(b.label, b.x, b.y, b.r > 40 ? 26 : 16, on ? PAL.ink : '#fff'); }
+  const held = touch.steerId !== null, bx = held ? touch.x0 : PAD.x - edgeShift(SAFE_L), by = held ? touch.y0 : PAD.y, R = tune.touch_pad_range;
+  let kx = held ? touch.x - touch.x0 : 0, ky = held ? touch.y - touch.y0 : 0; const kd = Math.hypot(kx, ky); if (kd > R) { kx *= R / kd; ky *= R / kd; }
+  ring(bx, by, R + 30, 'rgba(20,12,48,0.55)', '#fff');
+  ctx.fillStyle = '#fff';
+  for (let i = 0; i < 4; i++) { const a = i * Math.PI / 2, c = Math.cos(a), n = Math.sin(a), t = R + 18, u = R + 2; ctx.beginPath(); ctx.moveTo(bx + c * t, by + n * t); ctx.lineTo(bx + c * u - n * 11, by + n * u + c * 11); ctx.lineTo(bx + c * u + n * 11, by + n * u - c * 11); ctx.closePath(); ctx.fill(); }
+  ring(bx + kx, by + ky, 36, held ? PAL.it : 'rgba(255,255,255,0.85)', PAL.ink);
+  if (!held) text('PUSH TO DRIVE', bx, by - R - 52, 18, '#fff');
+  if (innerHeight > innerWidth) { panel(W / 2 - 330, H / 2 - 40, 660, 80, 'rgba(255,225,74,0.95)'); text('Turn your phone sideways', W / 2, H / 2, 40, PAL.ink); }
+}
+function drawPlay() { ctx.clearRect(-EX, -EY, W + 2 * EX, H + 2 * EY); place(ALPHA); chaseCam(ALPHA); render(); hud(); }
+function shade(a = 0.6) { ctx.fillStyle = `rgba(20,12,48,${a})`; ctx.fillRect(-EX, -EY, W + 2 * EX, H + 2 * EY); }
+function boardLines(y) { // the scoreboard on the between-round and results screens: two columns for a big field
+  const R = rigs(), two = R.length > 4, per = two ? Math.ceil(R.length / 2) : R.length;
+  R.forEach((v, n) => { const cx = two ? W / 2 + (n < per ? -250 : 250) : W / 2, yy = y + (n % per) * 34, fs = two ? 19 : 22;
+    icon(v.kind, cx - 200, yy, 9, false); text(who(v.i), cx - 176, yy, fs, v.i === ME ? PAL.it : '#fff', 'left'); text(fmt(state.totals[v.i]) + ' s', cx + 200, yy, fs, '#fff', 'right'); });
+}
+function star(x, y, r, on) { ctx.beginPath(); for (let i = 0; i < 10; i++) { const a = -Math.PI / 2 + i * Math.PI / 5, q = i % 2 ? r * 0.45 : r; ctx.lineTo(x + Math.cos(a) * q, y + Math.sin(a) * q); } ctx.closePath(); ctx.fillStyle = on ? PAL.it : 'rgba(255,255,255,0.18)'; ctx.fill(); ctx.strokeStyle = PAL.ink; ctx.lineWidth = 3; ctx.stroke(); }
+const go = () => touch.on || touch.coarse ? 'Tap' : 'Press Enter';
+
+// =========================================================================================
+// MULTIPLAYER: private rooms. A server runs this same file's rules for the room (NET.host, see
+// server.js). Each browser in the room (NET.client) sends its driving, predicts its own rig so
+// the steering answers at once, and eases every other vehicle towards what the server reports.
+// =========================================================================================
+let NET = null, REPLAY = false;
+const net = { ws: null, status: 'off', code: '', players: [], you: null, bots: 3, phase: 'lobby', shift: -1, seq: 0, pending: [], lastTag: 0, err: '', held: {}, lan: [], ex: 0, ez: 0, eh: 0, left: true, pingT: 0, copied: 0, retry: 0, lastSnap: 0 };
+const humanSeat = i => NET && NET.humans ? NET.humans.includes(i) : i === ME;
+const liveHuman = i => humanSeat(i) && !(NET && NET.away && NET.away[i] === 'bot');   // a person driving, not a seat a bot is keeping warm
+function hostDriver(v) { // on the server: a person's seat takes that person's last input; a dropped one brakes, then a bot covers
+  if (!NET.humans.includes(v.i)) return botDriver(v);
+  if (NET.away[v.i] === 'bot') return botDriver(v);
+  if (NET.away[v.i]) return { throttle: 0, steer: 0, hand: true, fire: false };
+  return NET.inputs[v.i] || { throttle: 0, steer: 0, hand: false, fire: false };
+}
+const netToken = code => { try { return localStorage.getItem('crashout:' + code) || ''; } catch (e) { return ''; } };
+const netLink = () => ((/^(localhost|127\.|\[::1\])/.test(location.hostname) && net.lan[0]) ? net.lan[0] : location.origin) + '/?room=' + net.code;   // a link another device can open
+function netSend(o) { if (net.ws && net.ws.readyState === 1) net.ws.send(JSON.stringify(o)); }
+function netOpen(first) {
+  if (!/^http/.test(location.protocol) || typeof WebSocket === 'undefined') { net.err = 'Multiplayer needs the game server: run server.js and open the address it prints.'; return; }
+  net.left = false; if (net.status !== 'lost') net.status = 'connecting'; let opened = false;
+  const ws = new WebSocket((location.protocol === 'https:' ? 'wss://' : 'ws://') + location.host + '/ws'); net.ws = ws;
+  ws.onopen = () => { opened = true; ws.send(JSON.stringify(first)); };
+  ws.onmessage = e => { let m; try { m = JSON.parse(e.data); } catch (x) { return; } netMsg(m); };
+  ws.onclose = () => {
+    if (net.ws !== ws) return; net.ws = null;
+    if (net.left) { net.status = 'off'; return; }
+    if (!net.code) { net.status = 'off'; net.err = opened ? 'The server closed the connection.' : 'No game server answered at this address.'; if (scene === 'join' || scene === 'lobby') scene = 'title'; return; }
+    net.status = 'lost'; net.retry = 1;                      // in a room: keep trying to get back to the seat
+  };
+}
+function netCreate() { net.err = ''; net.code = ''; netOpen({ t: 'create' }); }
+function netJoin(code) { code = String(code || '').toUpperCase().replace(/[^A-Z0-9]/g, '').slice(0, 4); if (code.length < 4) { net.err = 'A room code has four characters.'; return; } net.err = ''; net.code = ''; netOpen({ t: 'join', room: code, token: netToken(code) }); }
+function netLeave() { net.left = true; netSend({ t: 'leave' }); if (net.ws) net.ws.close(); net.code = ''; net.status = 'off'; net.players = []; if (NET) { NET = null; ME = ME % 4; reset(); } scene = 'title'; }
+function netMsg(m) {
+  if (m.t === 'room') {
+    net.code = m.code; net.players = m.players; net.you = m.players.find(p => p.id === m.you) || null; net.bots = m.bots; net.phase = m.phase; net.lan = m.lan || []; net.status = 'on'; net.err = '';
+    if (m.token) { try { localStorage.setItem('crashout:' + m.code, m.token); } catch (e) { /* no storage: a reload cannot reclaim the seat */ } }
+    document.getElementById('invite').value = netLink();
+    if (m.phase !== 'lobby' && net.you && net.you.seat >= 0) { // a shift is on and you have a seat in it: get in, or back in
+      const humans = m.players.filter(p => p.seat >= 0).map(p => p.seat), pnum = {}; m.players.forEach(p => { if (p.seat >= 0) pnum[p.seat] = p.num; });
+      if (!NET || net.shift !== m.shift || scene === 'lobby' || scene === 'title' || scene === 'join') {
+        ME = net.you.seat; MODE = 'tag'; NET = { client: true, humans, roles: m.roles, pnum }; net.shift = m.shift; net.lastTag = 0; net.pending = []; net.ex = net.ez = net.eh = 0; reset(); scene = 'play';
+      } else { NET.humans = humans; NET.pnum = pnum; }
+    } else { if (NET) { NET = null; ME = ME % 4; reset(); } scene = 'lobby'; }
+  } else if (m.t === 'snap') applySnap(m);
+  else if (m.t === 'err') { net.err = m.msg; if (m.fatal) { net.left = true; net.code = ''; if (net.ws) net.ws.close(); if (NET) { NET = null; ME = ME % 4; reset(); } scene = 'title'; } }
+}
+function applySnap(m) { // what the server says is so
+  if (!NET || !NET.client || m.sh !== net.shift) return;
+  net.lastSnap = state.t; net.held = m.held || {};
+  if (m.sc !== scene) { if (m.sc === 'play') { net.pending = []; say([m.it === ME ? LINES.start[2] : LINES.start[(m.r - 1) % 2]], state.vehicles[m.it]); } scene = m.sc; }
+  if (state.phase === 'countdown' && m.ph === 'run') tone(880, 0.35, 'square', 0.25);
+  state.round = m.r; state.phase = m.ph; state.count = m.ct; state.clock = m.ck; state.totals = m.tot; state.netWait = m.w;
+  for (const [n, f, t] of m.ev) if (n > net.lastTag) { net.lastTag = n; tag(state.vehicles[f], state.vehicles[t]); }   // each handoff happens once, when the server says so
+  state.it = m.it;
+  if (scene === 'results') { const share = state.totals[ME] / (tune.rounds * tune.round_time); state.stars = clamp(2 + Math.floor((share - tune.star_base) / tune.star_step), 1, 5); state.score = Math.floor(state.totals[ME]); }
+  else state.score = Math.floor(state.totals[ME] + state.vehicles[ME].clean);
+  const seen = new Set();
+  for (const a of m.v) {
+    const v = state.vehicles[a[0]]; if (!v) continue; seen.add(a[0]);
+    const S = { x: a[1], z: a[2], h: a[3], vx: a[4], vz: a[5], layer: a[6] === 1 ? 'deck' : a[6] === 2 ? 'low' : null, stall: a[7], immune: a[8], clean: a[9], spin: a[10], tags: a[11], grip: a[12] };
+    if (a[0] === ME && v.active) { netReconcile(v, S, (m.ack && m.ack[ME]) || 0); continue; }
+    const jump = !v.active || Math.hypot(S.x - v.x, S.z - v.z) > 25; v.active = true;
+    Object.assign(v, { vx: S.vx, vz: S.vz, layer: S.layer, stall: S.stall, immune: S.immune, clean: S.clean, spin: S.spin, tags: S.tags }); v.net = S;
+    if (jump) { v.x = v.px = S.x; v.z = v.pz = S.z; v.h = v.ph = S.h; if (a[0] === ME) { state.camYaw = state.camPrev = S.h; net.ex = net.ez = net.eh = 0; net.pending = []; } }
+  }
+  state.vehicles.forEach(v => { if (!seen.has(v.i)) v.active = false; });
+}
+function netReconcile(v, S, ack) { // your own rig: take the server's word for where it was, then re-drive the inputs it has not seen yet
+  const ox = v.x, oz = v.z, oh = v.h;
+  if (Math.hypot(S.x - v.x, S.z - v.z) > 25) { Object.assign(v, S); v.px = v.x; v.pz = v.z; v.ph = v.h; state.camYaw = state.camPrev = v.h; net.pending = []; net.ex = net.ez = net.eh = 0; return; }   // a new round put you somewhere else
+  Object.assign(v, { x: S.x, z: S.z, h: S.h, vx: S.vx, vz: S.vz, layer: S.layer, stall: S.stall, spin: S.spin, grip: S.grip, clean: S.clean, tags: S.tags });
+  net.pending = net.pending.filter(p => p.s > ack);
+  if (scene === 'play' && state.phase === 'run') { REPLAY = true; for (const p of net.pending) { v.inp = p.inp; drive(v, STEP); hitWorld(v); layerOf(v); } REPLAY = false; }
+  v.immune = S.immune;
+  net.ex += ox - v.x; net.ez += oz - v.z; net.eh += wrapA(oh - v.h);          // keep drawing where you were, and ease across
+  if (Math.hypot(net.ex, net.ez) > 10) net.ex = net.ez = net.eh = 0;
+}
+function netClientStep() { // a browser in a room: send the driving, predict your own rig, ease the others, draw
+  const dt = STEP, vs = state.vehicles, me = vs[ME];
+  if (scene === 'results' || scene === 'between' || scene === 'over') { if (scene === 'results' && pressed('Enter')) netSend({ t: 'ready' }); }
+  if (pressed('Escape') && scene === 'results') { netLeave(); return; }
+  state.t += dt;
+  for (const v of vs) { v.px = v.x; v.pz = v.z; v.ph = v.h; }
+  state.camPrev = state.camYaw;
+  if (state.msgT > 0) state.msgT -= dt;
+  state.shake *= Math.exp(-6 * dt); if (state.flash > 0) state.flash -= dt; if (state.fly > 0) state.fly -= dt;
+  const running = scene === 'play' && state.phase === 'run';
+  if (running) {
+    const inp = humanDriver(); inp.fire = false;
+    const msg = { t: 'in', s: ++net.seq, th: +inp.throttle.toFixed(2), st: +inp.steer.toFixed(2), h: inp.hand ? 1 : 0 }; if (pressed('KeyR')) msg.r = 1;
+    netSend(msg); net.pending.push({ s: net.seq, inp }); if (net.pending.length > 240) net.pending.shift();
+    if (me.active && net.status === 'on') { me.inp = inp; drive(me, dt); hitWorld(me); layerOf(me); }
+    state.clock = Math.max(0, state.clock - dt);
+    if (state.it === ME) { state.gripeT -= dt; if (state.gripeT <= 0) { state.gripeT = 4.2; state.gripe = (state.gripe + 1) % LINES.gripes.length; } }
+  } else if (scene === 'play' && state.phase === 'countdown') state.count -= dt;
+  else if (state.netWait > 0) state.netWait -= dt;
+  const k = Math.min(1, 14 * dt);
+  for (const v of vs) { // everyone else: carry on along their last reported heading, and close the gap to their last reported place
+    if (!v.active || v.i === ME || !v.net) continue; const S = v.net;
+    if (running) { S.x += S.vx * dt; S.z += S.vz * dt; }
+    v.x += (S.x - v.x) * k; v.z += (S.z - v.z) * k; v.h += wrapA(S.h - v.h) * k;
+    if (v.stall > 0) v.stall -= dt; if (v.immune > 0) v.immune -= dt;
+  }
+  const e = Math.exp(-9 * dt); net.ex *= e; net.ez *= e; net.eh *= e;
+  groundAll();
+  state.camYaw += wrapA(me.h - state.camYaw) * Math.min(1, tune.cam_turn * dt);
+  state.camLow += ((me.layer === 'low' && Math.abs(me.x) < CH.bridgeW + 16 ? 1 : 0) - state.camLow) * Math.min(1, 5 * dt);
+  for (const q of puffs) if (q.life > 0) { q.life -= dt; q.x += q.vx * dt; q.y += q.vy * dt; q.z += q.vz * dt; q.vy -= (q.size < 0.5 ? 18 : 0) * dt; }
+}
+function netHousekeep() { // every step, in or out of a match: keep the line alive, get back in after a drop, show the right text boxes
+  titleT += 0;
+  document.getElementById('invite').style.display = scene === 'lobby' ? 'block' : 'none';
+  document.getElementById('roomcode').style.display = scene === 'join' ? 'block' : 'none';
+  if (net.copied > 0) net.copied -= STEP;
+  if (net.status === 'on') { net.pingT -= STEP; if (net.pingT <= 0) { net.pingT = 1; netSend({ t: 'ping' }); } }
+  if (net.status === 'lost') { net.retry -= STEP; if (net.retry <= 0) { net.retry = 1.5; if (!net.ws) netOpen({ t: 'join', room: net.code, token: netToken(net.code) }); } }
+}
+addEventListener('visibilitychange', () => { if (typeof document !== 'undefined' && document.visibilityState === 'visible' && net.code && !net.left) { if (!net.ws || net.ws.readyState > 1) { net.ws = null; net.status = 'lost'; net.retry = 0; } } });   // a phone waking up: get straight back in
+function netHud(PH) { // who the other people are, and who has dropped
+  for (const p of net.players) {
+    if (p.seat < 0 || p.seat === ME) continue; const v = state.vehicles[p.seat]; if (!v.active) continue;
+    const s = toScreen(v.x, v.y + 5.2, v.z); if (s.behind || s.x < 30 || s.x > W - 30 || s.y < 30) continue;
+    const w = PH ? 74 : 52, h = PH ? 36 : 26; panel(s.x - w / 2, s.y - h / 2, w, h, p.on ? 'rgba(125,240,255,0.95)' : 'rgba(160,160,170,0.9)'); text('P' + p.num, s.x, s.y + 1, PH ? 26 : 19, PAL.ink);
+  }
+  let y = PH ? 220 : 142;
+  for (const p of net.players) if (p.seat >= 0 && !p.on && p.seat !== ME) { const left = net.held[p.seat] || 0; panel(W / 2 - 330, y, 660, 36, 'rgba(160,20,60,0.92)'); text(left > 0 ? `P${p.num} lost connection: seat held for ${Math.ceil(left)} s` : `P${p.num} is away: a bot is driving ${SEAT_NAMES[p.seat]}`, W / 2, y + 19, 20, '#fff'); y += 42; }
+  if (net.status !== 'on') { shade(0.55); panel(W / 2 - 360, H / 2 - 70, 720, 140, 'rgba(160,20,60,0.95)'); text('CONNECTION LOST', W / 2, H / 2 - 22, 46, '#fff'); text('Reconnecting: your seat is being held', W / 2, H / 2 + 34, 24, '#ffe14a'); }
+}
+const LOBBY = { copy: { x: 1014, y: 220, w: 190, h: 48 }, cardY: 372, cardH: 148, botsY: 548, start: { x: W / 2, y: 614, w: 420, h: 62 } };
+function lobbyTap(x, y) {
+  const inBox = b => Math.abs(x - b.x) < b.w / 2 && Math.abs(y - b.y) < b.h / 2;
+  if (inBox(LOBBY.copy)) { copyInvite(); return; }
+  for (let i = 0; i < 4; i++) if (Math.abs(x - CARDS[i]) < CARD_W / 2 && y > LOBBY.cardY && y < LOBBY.cardY + LOBBY.cardH) { netSend({ t: 'rig', kind: i }); tone(660, 0.08, 'square', 0.15); return; }
+  if (net.you && net.you.host && Math.abs(x - W / 2) < 230 && Math.abs(y - LOBBY.botsY) < 22) { netSend({ t: 'bots', n: net.bots >= 6 ? 0 : net.bots + 1 }); return; }
+  if (net.you && net.you.host && inBox(LOBBY.start)) hit.add('Enter');
+}
+function copyInvite() { // the link is also in the box, to select by hand where copying is refused
+  const el = document.getElementById('invite'), done = () => { net.copied = 2; };
+  try { navigator.clipboard.writeText(netLink()).then(done, () => { el.focus(); el.select(); }); } catch (e) { el.focus(); el.select(); }
+}
+const JOIN_BTN = { go: { x: W / 2 - 150, y: 470, w: 260, h: 58 }, back: { x: W / 2 + 150, y: 470, w: 260, h: 58 } };
+function joinTap(x, y) { for (const k in JOIN_BTN) { const b = JOIN_BTN[k]; if (Math.abs(x - b.x) < b.w / 2 && Math.abs(y - b.y) < b.h / 2) hit.add(k === 'go' ? 'Enter' : 'Escape'); } }
+const TITLE_BTN = { solo: { x: W / 2 - 290, y: 612, w: 272, h: 56, label: 'SOLO PLAY', key: 'Enter' }, create: { x: W / 2, y: 612, w: 272, h: 56, label: 'CREATE ROOM', key: 'C' }, join: { x: W / 2 + 290, y: 612, w: 272, h: 56, label: 'JOIN ROOM', key: 'J' } };
+let titleT = 0;
+const CARDS = [W / 2 - 318, W / 2 - 106, W / 2 + 106, W / 2 + 318], CARD_W = 200, CARD_Y = 252, CARD_H = 172, BOTS_Y = 452;
+const moreBots = () => { CONFIG.bots.value = tune.bots >= CONFIG.bots.max ? CONFIG.bots.min : tune.bots + 1; };
+const MODE_Y = 184, MODE_X = [W / 2 - 165, W / 2 + 165], MODES = [['tag', 'PATIENT TAG'], ['br', 'BATTLE ROYALE']];
+const canFull = () => typeof document !== 'undefined' && !!document.fullscreenEnabled && !document.fullscreenElement;
+const FULL_BTN = { x: W - 110, y: 34, w: 190, h: 40 };
+function goFull() { try { const p = document.documentElement.requestFullscreen({ navigationUI: 'hide' }); if (p && p.catch) p.catch(() => {}); } catch (e) { /* this browser has no full screen */ } }
+function titleTap(x, y) { // pick a mode, a rig or the number of bots; anything else starts the match
+  if (canFull() && Math.abs(x - (FULL_BTN.x + edgeShift(SAFE_R))) < FULL_BTN.w / 2 && Math.abs(y - FULL_BTN.y) < FULL_BTN.h / 2) { goFull(); return true; }
+  for (let i = 0; i < 2; i++) if (Math.abs(x - MODE_X[i]) < 155 && Math.abs(y - MODE_Y) < 24) { MODE = MODES[i][0]; tone(740, 0.08, 'square', 0.15); return true; }
+  for (let i = 0; i < 4; i++) if (Math.abs(x - CARDS[i]) < CARD_W / 2 && y > CARD_Y && y < CARD_Y + CARD_H) { ME = i; tone(660, 0.08, 'square', 0.15); return true; }
+  if (Math.abs(x - W / 2) < 230 && Math.abs(y - BOTS_Y) < 22) { moreBots(); tone(520, 0.08, 'square', 0.15); return true; }
+  for (const k in TITLE_BTN) { const b = TITLE_BTN[k]; if (Math.abs(x - b.x) < b.w / 2 && Math.abs(y - b.y) < b.h / 2) hit.add(k === 'solo' ? 'Enter' : k === 'create' ? 'KeyC' : 'KeyJ'); }
+  return true;
+}
+const RES_BTN = { rematch: { x: W / 2 - 170, y: 650, w: 310, h: 58, label: 'REMATCH', key: 'Enter' }, mode: { x: W / 2 + 170, y: 650, w: 310, h: 58, label: 'CHANGE MODE', key: 'Escape' } };
+function resultTap(x, y) { for (const k in RES_BTN) { const b = RES_BTN[k]; if (Math.abs(x - b.x) < b.w / 2 && Math.abs(y - b.y) < b.h / 2) hit.add(b.key); } }
+const scenes = {
+  figures: { // every vehicle side by side, its name under it
+    update(dt) { state.t += dt; },
+    draw() {
+      ctx.clearRect(-EX, -EY, W + 2 * EX, H + 2 * EY);
+      const vs = state.vehicles, spots = [[46, 18], [38.5, 18], [30, 18], [22.5, 18], [15.5, 18]];
+      const shown = [0, 1, 2, 3, NR];
+      vs.forEach((v, i) => { const n = shown.indexOf(i); v.active = n >= 0; if (n >= 0) { v.x = v.px = spots[n][0]; v.z = v.pz = spots[n][1]; v.h = v.ph = 2.45; v.vx = v.vz = 0; v.y = 0; v.pitch = 0; v.immune = 0; } });
+      state.it = 1; state.fly = 0; place(1);
+      cam.fov = 64; cam.updateProjectionMatrix(); cam.position.set(30, 7, -8); cam.lookAt(30, 1.5, 16); render();
+      panel(0, H - 150, W, 150);
+      ['amb', 'fire', 'cop', 'hum', 'civ'].forEach((k, i) => { const s = toScreen(spots[i][0], 0, spots[i][1]); text(KINDS[k].label + (i >= 4 ? '' : i === ME ? ' (you)' : ' (bot)'), s.x, H - 110, 20, '#fff'); });
+      text('Mr. Crouch, the patient: whoever carries him is IT', W / 2, H - 60, 22, PAL.it);
+    },
+  },
+  title: { // the mode, the rig to drive, how many bots, the controls
+    update(dt) {
+      titleT += dt;
+      if (pressed('ArrowUp') || pressed('ArrowDown') || pressed('KeyW') || pressed('KeyS') || pressed('KeyT') || pressed('Tab')) MODE = MODE === 'tag' ? 'br' : 'tag';
+      if (pressed('ArrowLeft') || pressed('KeyA')) ME = (ME + 3) % 4;
+      if (pressed('ArrowRight') || pressed('KeyD')) ME = (ME + 1) % 4;
+      for (let i = 0; i < 4; i++) if (pressed('Digit' + (i + 1))) ME = i;
+      if (pressed('KeyB')) moreBots();
+      if (pressed('Enter') || pressed('Space')) { reset(); scene = 'play'; }
+      else if (pressed('KeyC')) netCreate();
+      if (pressed('KeyG') && canFull()) goFull();
+      else if (pressed('KeyJ')) { net.err = ''; scene = 'join'; const el = document.getElementById('roomcode'); el.value = ''; setTimeout(() => el.focus(), 50); }
+    },
+    draw() {
+      ctx.clearRect(-EX, -EY, W + 2 * EX, H + 2 * EY); place(1);
+      const a = titleT * 0.25, touchy = touch.on || touch.coarse, br = MODE === 'br';   // the first picture: the bridge over the bayou, downtown ahead
+      cam.fov = 58; cam.updateProjectionMatrix(); cam.position.set(Math.sin(a) * 5, 9 + Math.sin(a * 0.7), 84 + Math.sin(a * 0.5) * 10); cam.lookAt(0, 30, 205); render();
+      shade(0.45); text(TITLE.toUpperCase(), W / 2 + 4, 70, 84, PAL.ink); text(TITLE.toUpperCase(), W / 2, 66, 84, PAL.it);
+      text(EDITION.toUpperCase(), W / 2, 128, 30, '#ff6ab0');
+      MODES.forEach(([m, label], i) => { const on = MODE === m; panel(MODE_X[i] - 155, MODE_Y - 24, 310, 48, on ? 'rgba(255,225,74,0.96)' : undefined); text(label, MODE_X[i], MODE_Y + 1, 24, on ? PAL.ink : '#fff'); });
+      text(br ? 'Three minutes, blasters and ammo crates. Most rival wrecks at the buzzer wins.' : "Whoever carries Mr. Crouch is IT. Ram a rival to hand him over. Don't be IT at the buzzer.", W / 2, 230, 18, '#fff');
+      RIGS.forEach((k, i) => {
+        const x = CARDS[i], on = i === ME, K = KINDS[k], nb = botSeats().filter(j => j % 4 === i).length;
+        panel(x - CARD_W / 2, CARD_Y, CARD_W, CARD_H, on ? 'rgba(255,225,74,0.96)' : undefined);
+        icon(k, x, CARD_Y + 34, 15, false); text(K.label, x, CARD_Y + 76, 23, on ? PAL.ink : '#fff');
+        text(K.good, x, CARD_Y + 104, 15, on ? PAL.ink : '#7dff5a'); text(K.bad, x, CARD_Y + 126, 15, on ? PAL.ink : '#ff9ab0');
+        text(on ? (nb ? `YOU + ${nb} BOT` : 'YOU') : nb ? `${nb} BOT${nb > 1 ? 'S' : ''}` : 'SITS OUT', x, CARD_Y + 153, 16, on ? PAL.ink : '#d8ccff');
+      });
+      panel(W / 2 - 230, BOTS_Y - 20, 460, 40); text(`RIVAL BOTS: ${tune.bots}   (${touchy ? 'tap' : 'B'} to change)`, W / 2, BOTS_Y, 19, '#ffe14a');
+      panel(W / 2 - 430, 486, 860, 70); (touchy ? (br ? BR_TOUCH_CONTROLS : TOUCH_CONTROLS) : (br ? BR_CONTROLS : CONTROLS)).forEach((c, i) => text(c, W / 2, 507 + i * 28, 17, '#fff'));
+      if (canFull()) { const fb = FULL_BTN, fx = fb.x + edgeShift(SAFE_R); panel(fx - fb.w / 2, fb.y - fb.h / 2, fb.w, fb.h); ctx.strokeStyle = '#fff'; ctx.lineWidth = 2; ctx.strokeRect(fx - fb.w / 2, fb.y - fb.h / 2, fb.w, fb.h); text(touchy ? 'FULL SCREEN' : 'FULL SCREEN (G)', fx, fb.y + 1, 16, '#fff'); }
+      for (const k in TITLE_BTN) { const b = TITLE_BTN[k], main = k === 'solo'; panel(b.x - b.w / 2, b.y - b.h / 2, b.w, b.h, main ? 'rgba(255,225,74,0.96)' : 'rgba(20,12,48,0.92)'); ctx.strokeStyle = '#fff'; ctx.lineWidth = 3; ctx.strokeRect(b.x - b.w / 2, b.y - b.h / 2, b.w, b.h);
+        text(b.label, b.x, b.y - (touchy ? 0 : 8), 24, main ? PAL.ink : '#fff'); if (!touchy) text(b.key, b.x, b.y + 17, 14, main ? PAL.ink : '#d8ccff'); }
+      text(net.err || (net.status === 'connecting' ? 'Connecting to the game server...' : 'Rooms: Patient Tag for two people on two devices. Combat Racing and Campaign are not built yet.'), W / 2, 668, 16, net.err ? '#ff9ab0' : '#d8ccff');
+    },
+  },
+  play: {
+    update(dt) { if (pressed('KeyP') || pressed('Escape')) { scene = 'pause'; return; } playStep(dt); },
+    draw: drawPlay,
+  },
+  pause: {
+    update() { if (pressed('KeyP') || pressed('Escape') || pressed('Enter')) scene = 'play'; },
+    draw() { drawPlay(); shade(); text('PAUSED', W / 2, H / 2 - 20, 64, '#fff'); text(touch.on ? 'Tap to carry on' : 'P to carry on', W / 2, H / 2 + 44, 26, '#ffe14a'); },
+  },
+  between: { // a round won: on to the next
+    update() { if (pressed('Enter') || pressed('Space')) { startRound(state.round + 1); scene = 'play'; } },
+    draw() {
+      drawPlay(); shade(0.7); text(`ROUND ${state.round} SURVIVED`, W / 2, 170, 60, PAL.it);
+      text(`${SEAT_NAMES[state.it]} was left holding Mr. Crouch`, W / 2, 230, 26, '#fff'); boardLines(300);
+      text(state.round + 1 >= tune.rounds ? 'Last round: the bots stop being polite' : 'Next round: the bots wake up', W / 2, 470, 24, '#d8ccff');
+      text(NET ? `Next round in ${Math.max(1, Math.ceil(state.netWait || 0))}` : `${go()} for the next round`, W / 2, 546, 34, '#fff');
+    },
+  },
+  over: { // IT at the buzzer: the round again, never the whole shift
+    update() { if (pressed('KeyR') || pressed('Enter')) { startRound(state.round); scene = 'play'; } },
+    draw() {
+      drawPlay(); shade(0.75);
+      if (NET) { text(state.it === ME ? 'ROUND LOST' : 'ROUND REPLAYED', W / 2, 220, 72, '#ff6a8a'); text(`${who(state.it)} was stuck with Mr. Crouch at the buzzer: everyone plays the round again`, W / 2, 300, 24, '#fff'); }
+      else { text('ROUND LOST', W / 2, 220, 76, '#ff6a8a'); text(state.gained, W / 2, 300, 26, '#fff'); }
+      text('"I shall be writing a letter." - Mr. Crouch', W / 2, 352, 24, '#ffe14a'); text(NET ? `Replay in ${Math.max(1, Math.ceil(state.netWait || 0))}` : `${go()} to try this round again`, W / 2, 470, 34, '#fff');
+    },
+  },
+  results: {
+    update() { if (pressed('Enter')) { scene = 'title'; reset(); } },
+    draw() {
+      drawPlay(); shade(0.75); text('SHIFT OVER', W / 2, 110, 64, PAL.it); text('PUBLIC TRUST', W / 2, 176, 24, '#fff');
+      for (let i = 0; i < 5; i++) star(W / 2 - 160 + i * 80, 236, 34, i < state.stars);
+      boardLines(316); text(`You handed Mr. Crouch over ${state.vehicles[ME].tags} time${state.vehicles[ME].tags === 1 ? '' : 's'}`, W / 2, 476, 24, '#d8ccff');
+      if (NET) { text(`You: ${state.score} seconds free of Mr. Crouch`, W / 2, 536, 26, '#fff'); const r = net.players.filter(p => p.seat >= 0).map(p => `P${p.num} ${!p.on ? 'away' : p.ready ? 'ready' : 'not ready'}`).join('   ');
+        text(net.you && net.you.ready ? 'Waiting for the other player' : `${go()} for a rematch in this room`, W / 2, 584, 30, PAL.it); text(r + '      Esc: leave the room', W / 2, 628, 18, '#d8ccff'); }
+      else text(`${state.score} seconds clean. ${go()} for a new shift`, W / 2, 552, 30, '#fff');
+    },
+  },
+};
+scenes.join = { // type the four-character code of a friend's room
+  update() {
+    const el = document.getElementById('roomcode');
+    if (pressed('Enter') || pressed('NumpadEnter')) netJoin(el.value);
+    else if (pressed('Escape')) { net.err = ''; scene = 'title'; }
+  },
+  draw() {
+    ctx.clearRect(-EX, -EY, W + 2 * EX, H + 2 * EY); place(1); render(); shade(0.8);
+    text('JOIN A ROOM', W / 2, 150, 64, PAL.it); text('Type the four-character room code from the host', W / 2, 232, 24, '#fff'); text('(or just open the invite link they sent you)', W / 2, 268, 18, '#d8ccff');
+    for (const k in JOIN_BTN) { const b = JOIN_BTN[k], main = k === 'go'; panel(b.x - b.w / 2, b.y - b.h / 2, b.w, b.h, main ? 'rgba(255,225,74,0.96)' : 'rgba(20,12,48,0.92)'); ctx.strokeStyle = '#fff'; ctx.lineWidth = 3; ctx.strokeRect(b.x - b.w / 2, b.y - b.h / 2, b.w, b.h); text(main ? 'JOIN' : 'BACK', b.x, b.y, 26, main ? PAL.ink : '#fff'); }
+    if (net.err) text(net.err, W / 2, 560, 22, '#ff9ab0'); else if (net.status === 'connecting') text('Connecting...', W / 2, 560, 22, '#d8ccff');
+  },
+};
+scenes.lobby = { // the room before a shift: who is here, what they drive, and the host's start button
+  update() {
+    const you = net.you; if (!you) return;
+    if (pressed('ArrowLeft') || pressed('KeyA')) netSend({ t: 'rig', kind: (you.kind + 3) % 4 });
+    if (pressed('ArrowRight') || pressed('KeyD')) netSend({ t: 'rig', kind: (you.kind + 1) % 4 });
+    for (let i = 0; i < 4; i++) if (pressed('Digit' + (i + 1))) netSend({ t: 'rig', kind: i });
+    if (pressed('KeyC')) copyInvite();
+    if (you.host && pressed('KeyB')) netSend({ t: 'bots', n: net.bots >= 6 ? 0 : net.bots + 1 });
+    if (you.host && (pressed('Enter') || pressed('NumpadEnter'))) netSend({ t: 'start' });
+    if (pressed('Escape')) netLeave();
+  },
+  draw() {
+    ctx.clearRect(-EX, -EY, W + 2 * EX, H + 2 * EY); place(1);
+    const a = titleT * 0.25, you = net.you, touchy = touch.on || touch.coarse;
+    cam.fov = 58; cam.updateProjectionMatrix(); cam.position.set(Math.sin(a) * 5, 9, 84); cam.lookAt(0, 30, 205); render(); shade(0.72);
+    text('PRIVATE ROOM: PATIENT TAG', W / 2, 36, 22, '#ff6ab0'); text(net.code, W / 2, 100, 92, PAL.it); text('Room code. Or send this link: it opens straight into this room.', W / 2, 172, 18, '#fff');
+    const cb = LOBBY.copy; panel(cb.x - cb.w / 2, cb.y - cb.h / 2, cb.w, cb.h, net.copied > 0 ? 'rgba(125,255,90,0.95)' : 'rgba(255,225,74,0.96)'); text(net.copied > 0 ? 'COPIED' : 'COPY LINK', cb.x, cb.y + 1, 22, PAL.ink);
+    panel(W / 2 - 430, 262, 860, 96);
+    for (let n = 0; n < 2; n++) {
+      const p = net.players[n], y = 286 + n * 44;
+      if (!p) { text('Waiting for a second player...', W / 2, y, 21, '#d8ccff'); continue; }
+      text(`P${p.num}`, W / 2 - 400, y, 24, p.id === (you && you.id) ? PAL.it : '#fff', 'left'); icon(RIGS[p.kind], W / 2 - 320, y, 10, false); text(KINDS[RIGS[p.kind]].label + (p.id === (you && you.id) ? '  (you)' : ''), W / 2 - 296, y, 22, '#fff', 'left');
+      text((p.host ? 'HOST   ' : '') + (p.on ? (net.phase !== 'lobby' && p.seat < 0 ? 'joins at the rematch' : 'here') : 'away'), W / 2 + 400, y, 20, p.on ? '#7dff5a' : '#ff9ab0', 'right');
+    }
+    RIGS.forEach((k, i) => {
+      const x = CARDS[i], on = you && you.kind === i, K = KINDS[k], y = LOBBY.cardY, other = net.players.some(p => p !== you && p.kind === i);
+      panel(x - CARD_W / 2, y, CARD_W, LOBBY.cardH, on ? 'rgba(255,225,74,0.96)' : undefined);
+      icon(k, x, y + 28, 14, false); text(K.label, x, y + 64, 22, on ? PAL.ink : '#fff'); text(K.good, x, y + 90, 15, on ? PAL.ink : '#7dff5a'); text(K.bad, x, y + 110, 15, on ? PAL.ink : '#ff9ab0');
+      text(on ? (other ? 'YOU AND THE OTHER PLAYER' : 'YOU') : other ? 'THE OTHER PLAYER' : '', x, y + 132, 13, on ? PAL.ink : '#7df0ff');
+    });
+    panel(W / 2 - 230, LOBBY.botsY - 20, 460, 40); text(`BOTS IN THE MATCH: ${net.bots}` + (you && you.host ? `   (${touchy ? 'tap' : 'B'} to change)` : ''), W / 2, LOBBY.botsY, 19, '#ffe14a');
+    const sb = LOBBY.start;
+    if (net.phase !== 'lobby') text('A shift is being played: you join at the rematch', W / 2, sb.y, 26, '#fff');
+    else if (you && you.host) { panel(sb.x - sb.w / 2, sb.y - sb.h / 2, sb.w, sb.h, 'rgba(255,225,74,0.96)'); text(net.players.length < 2 ? 'START WITHOUT A SECOND PLAYER' : 'START THE SHIFT', sb.x, sb.y - (touchy ? 0 : 8), net.players.length < 2 ? 22 : 28, PAL.ink); if (!touchy) text('Enter', sb.x, sb.y + 19, 14, PAL.ink); }
+    else text('Waiting for the host to start', W / 2, sb.y, 28, '#fff');
+    text(net.status !== 'on' ? 'Connection lost: reconnecting...' : (touchy ? 'Tap a rig to choose it.' : 'Left / Right: your rig.   C: copy link.   Esc: leave the room.'), W / 2, 680, 16, net.status !== 'on' ? '#ff9ab0' : '#d8ccff');
+  },
+};
+scenes.brResults = { // the buzzer has gone: nothing scores any more. Rematch, or change mode.
+  update() {
+    if (pressed('Enter') || pressed('KeyR')) { reset(); scene = 'play'; }
+    else if (pressed('Escape') || pressed('KeyC')) { scene = 'title'; reset(); }
+  },
+  draw() {
+    drawPlay(); shade(0.94); const R = state.result, touchy = touch.on || touch.coarse;
+    text(R.draw ? 'DRAW' : R.leaders[0] === ME ? 'YOU WIN' : `${SEAT_NAMES[R.leaders[0]].toUpperCase()} WINS`, W / 2, 62, 62, PAL.it); text(state.gained, W / 2, 112, 22, '#fff');
+    const rh = R.rows.length > 6 ? 50 : 58, y0 = 172, cx = [W / 2 - 330, W / 2 - 250, W / 2 - 215, W / 2 + 180, W / 2 + 330];
+    text('PLACE', cx[0], y0 - 30, 16, '#ffe14a'); text('RIG', cx[2], y0 - 30, 16, '#ffe14a', 'left'); text('WRECKS', cx[3], y0 - 30, 16, '#ffe14a'); text('LOSSES', cx[4], y0 - 30, 16, '#ffe14a');
+    R.rows.forEach((r, n) => { const y = y0 + n * rh, mine = r.i === ME; panel(W / 2 - 390, y - rh / 2 + 3, 780, rh - 6, mine ? 'rgba(255,225,74,0.94)' : undefined);
+      const col = mine ? PAL.ink : '#fff'; text(String(r.place), cx[0], y, 28, col); icon(RIGS[r.i % 4], cx[1], y, 11, false); text(who(r.i), cx[2], y, 24, col, 'left'); text(String(r.kills), cx[3], y, 30, col); text(String(r.deaths), cx[4], y, 30, col); });
+    for (const k in RES_BTN) { const b = RES_BTN[k]; panel(b.x - b.w / 2, b.y - b.h / 2, b.w, b.h, k === 'rematch' ? 'rgba(255,225,74,0.96)' : 'rgba(20,12,48,0.92)'); ctx.strokeStyle = '#fff'; ctx.lineWidth = 3; ctx.strokeRect(b.x - b.w / 2, b.y - b.h / 2, b.w, b.h); text(b.label, b.x, b.y - (touchy ? 0 : 8), 26, k === 'rematch' ? PAL.ink : '#fff'); if (!touchy) text(k === 'rematch' ? 'Enter' : 'Esc', b.x, b.y + 17, 14, k === 'rematch' ? PAL.ink : '#d8ccff'); }
+  },
+};
+
+// ---- Loop: fixed step, frame time clamped ---------------------------------------------
+function step() {
+  if (pressed('KeyM')) { setMuted(!muted); hit.delete('KeyM'); }
+  if (NET && NET.client) netClientStep(); else scenes[scene].update(STEP);
+  netHousekeep(); hit.clear(); soundStep();
+}
+let last, acc = 0, ALPHA = 1; // ALPHA: how far the frame is between the last two steps
+function tick() {
+  const now = clock.now();
+  acc += Math.min(now - last, 0.25); last = now; // a stall never fast-forwards the game
+  while (acc >= STEP) { step(); acc -= STEP; }
+  ALPHA = acc / STEP; // draw between steps, so the view never judders
+  drawFrame();
+}
+function drawFrame() { scenes[scene].draw(); }
+function frame() { tick(); requestAnimationFrame(frame); }
+// A headless browser on a time budget runs timers but almost no animation frames: a timer
+// ticks when no frame has come for 100 ms on a visible page; a hidden tab stays paused.
+function timer() { if (document.visibilityState === 'visible' && clock.now() - last > 0.1) tick(); }
+
+// ---- What a check can read and drive (?manual=1 stops the loop; players never see it) ----
+window.game = {
+  get scene() { return scene; },
+  get state() { return state; },
+  get me() { return ME; }, set me(i) { ME = i; },
+  get mode() { return MODE; }, set mode(m) { MODE = m; },
+  get netInfo() { return { status: net.status, code: net.code, phase: net.phase, players: net.players, you: net.you, err: net.err, link: net.code ? netLink() : '', held: net.held, pending: net.pending.length, client: !!(NET && NET.client) }; },
+  net: { // the server's side of a room: it starts shifts, feeds inputs in and takes snapshots out, all as JSON
+    hostStart(json) { const o = JSON.parse(json); MODE = 'tag'; CONFIG.bots.value = o.bots; ME = o.roles[0]; NET = { host: true, humans: o.humans, roles: o.roles, inputs: {}, away: {}, acks: {}, wait: 0, tagN: 0, tagLog: [] }; reset(); scene = 'play'; },
+    hostInput(seat, json) {
+      const m = JSON.parse(json); if (!NET || !NET.humans.includes(seat)) return;
+      NET.inputs[seat] = { throttle: clamp(+m.th || 0, -1, 1), steer: clamp(+m.st || 0, -1, 1), hand: !!m.h, fire: false }; NET.acks[seat] = m.s | 0;
+      if (m.r && scene === 'play' && state.phase === 'run' && state.vehicles[seat].active) resetOnRoad(state.vehicles[seat]);
+    },
+    hostAway(seat, how) { if (!NET) return; if (how) { NET.away[seat] = how; delete NET.inputs[seat]; } else delete NET.away[seat]; },
+    hostTick() { // between rounds the server counts down, then starts the next one or the replay
+      if (events.length > 600) events.splice(0, events.length - 200);
+      if (scene === 'between' || scene === 'over') { NET.wait += STEP; if (NET.wait >= tune.net_between) { NET.wait = 0; startRound(scene === 'over' ? state.round : state.round + 1); scene = 'play'; } } else NET.wait = 0;
+    },
+    snapshot() {
+      const q = x => Math.round(x * 100) / 100;
+      return JSON.stringify({ sc: scene, r: state.round, ph: state.phase, ct: q(state.count), ck: q(state.clock), it: state.it, tot: state.totals.map(q), w: q(tune.net_between - NET.wait), ack: NET.acks, ev: NET.tagLog,
+        v: state.vehicles.filter(v => v.active).map(v => [v.i, q(v.x), q(v.z), q(v.h), q(v.vx), q(v.vz), v.layer === 'deck' ? 1 : v.layer === 'low' ? 2 : 0, q(Math.max(0, v.stall)), q(Math.max(0, v.immune)), q(v.clean), q(v.spin), v.tags, q(v.grip)]) });
+    },
+  },
+  get sounds() { return { ...sounds, context: audio ? audio.ac.state : 'not started' }; },
+  press(code) { hit.add(code); },
+  hold(code, on) { on ? down.add(code) : down.delete(code); },
+  get events() { return events; }, // the loop steps; a check empties it
+  step(n = 1, draw = true, alpha = 1) {
+    for (let i = 0; i < n; i++) step();
+    if (draw) { ALPHA = alpha; drawFrame(); }
+  },
+};
+
+addEventListener('resize', fit); addEventListener('orientationchange', () => setTimeout(fit, 250)); if (window.visualViewport) window.visualViewport.addEventListener('resize', fit);
+fit(); setTimeout(fit, 400);   // again once the host page has settled its bars
+reset();
+scene = params.get('scene') || 'title';
+if (params.get('room') && typeof WebSocket !== 'undefined') netJoin(params.get('room'));   // an invite link: straight into that room
+last = clock.now();
+if (params.get('manual') === '1') drawFrame();
+else { requestAnimationFrame(frame); setInterval(timer, 50); }
+</script>
+</body>
+</html>

@@ -29,6 +29,7 @@ After play: "Build Battle Royale now in the existing Crash Out: Houston Edition 
 After play: "Build the first playable multiplayer version of Crash Out: Houston Edition now. Work from the newest source in this session, including any Battle Royale work already present. Start with private-room Patient Tag for two human players on separate devices." The request went on to ask for Solo Play kept beside Create Room and Join Room, an invite link and short code, any rig for each player with duplicates told apart, bots in the remaining seats, a rematch in the same room, one authoritative simulation on a server that reuses the game's own rules, a shared replay when a person holds Mr. Crouch at the buzzer, exactly one handoff per collision, responsive local steering with smoothed remote rigs, and a held seat for a player who drops.
 After play: "Home Screen isn't formatted correctly. I can't even hit the right buttons"
 After play: "Why isn't full screen"
+After play: "It's fun!  Now level up the graphics and make a way to get health in battle royal"
 
 **Pitch:** Vehicle tag between rival emergency crews: whoever is stuck with the town's most insufferable patient is "IT", and the only way to get rid of him is to ram him into someone else's vehicle. *(guessed: the patient as the tag)*
 
@@ -91,6 +92,8 @@ The bots are a real fight from round one: they drive at nearly full speed, aim a
 - [x] One shared round result: a person holding Mr. Crouch at the buzzer replays the round for everyone; each person sees their own time free of him
 - [x] Your own rig is predicted locally and corrected smoothly; other rigs ease towards the server's reports
 - [x] A dropped player's seat is held, braked, for 20 seconds, then driven by a bot until they return; the same link puts them back in their seat
+- [x] Health crates in Battle Royale: white with a red cross, 40 health each, seven of them, back after 14 seconds; an arrow and a banner when you are low; bots fetch them when badly hurt
+- [x] A dusk graphics pass: lit windows and rooftop signs, lanterns on the palms with pools of light, zebra crossings, textured asphalt, drifting water, headlights and tail lights, tyre marks from drifts, stars, cloud bands, a haze round the sun, a lit bridge and a soft vignette
 - [x] Bot decisions: in Tag an IT bot predicts which bayou crossing you are taking and cuts you off at its exit when it can get there; in Battle Royale bots fetch ammo when dry, line up shots with a reaction delay and aiming error, give up a bad pursuit and fight one another
 - [x] Touch controls for a phone held sideways, beside the keyboard
 - [x] Civilian traffic that pulls over for sirens (thin stand-in) *(guessed)*
@@ -105,7 +108,8 @@ The bots are a real fight from round one: they drive at nearly full speed, aim a
 - emergency calls and the patient-stability meter · later *(guessed)*
 
 ## Keep
--
+- "It's fun!" *(you said)*, of the game with Patient Tag, Battle Royale, the four rigs and the edge-to-edge view
+- The subtle differences between the rigs, and the handling as it is *(you said)* · pins: amb_top 26, amb_accel 21, fire_top 25, fire_accel 10, fire_turn 0.8, cop_top 29.5, cop_accel 17, hum_top 23.5, hum_accel 15, grip 9, drift_grip 1.5
 
 ## Avoid
 - No on-foot sections: "It should stay all driving"

@@ -231,6 +231,7 @@ const PAL = {
   bld: [0xff5e3a, 0x00d2ff, 0xffd400, 0xff2e93, 0x7dff5a, 0xf2f2ff, 0xff9a3d], roof: [0x24204a, 0x3a1f5c],
   win: 0x1b2a6b, neon: [0xff2e93, 0x00f0ff, 0xffe14a], it: '#ffe14a', ink: '#1a1a6e',
 };
+let waterTex = null;
 function bankY(z) { // how far the ground drops into the bayou at this z
   if (z <= CH.z0 || z >= CH.z1) return 0;
   if (z < CH.z0 + CH.slope) return -(z - CH.z0) / CH.slope * CH.depth;
@@ -278,10 +279,12 @@ function flush(list, mat, shadows) {
 function slab(x0, x1, zA, yA, zB, yB, color, o) { // a flat or sloping sheet of ground between two z lines
   const g = new THREE.BufferGeometry();
   g.setAttribute('position', new THREE.Float32BufferAttribute([x0, yA, zA, x1, yA, zA, x1, yB, zB, x0, yA, zA, x1, yB, zB, x0, yB, zB], 3)); g.computeVertexNormals();
+  const u0 = x0 / 24, u1 = x1 / 24, vA = zA / 8, vB = zB / 8; g.setAttribute('uv', new THREE.Float32BufferAttribute([u0, vA, u1, vA, u1, vB, u0, vA, u1, vB, u0, vB], 2));
   const m = new THREE.Mesh(g, new THREE.MeshLambertMaterial({ color, side: THREE.DoubleSide, ...o })); m.receiveShadow = true; scene3.add(m); return m;
 }
+const blds = [];                                           // every building, for the dusk dressing later
 function building(x, z, w, d) {
-  const h = 10 + vr() * 18, c = PAL.bld[Math.floor(vr() * PAL.bld.length)];
+  const h = 10 + vr() * 18, c = PAL.bld[Math.floor(vr() * PAL.bld.length)]; blds.push([x, z, w, d, h]);
   box(w, h, d, c, x, h / 2, z); walls.push({ x0: x - w / 2, x1: x + w / 2, z0: z - d / 2, z1: z + d / 2 });   // only the building itself is solid
   for (let y = 4; y < h - 1.5; y += 3.3) { box(w + 0.24, 1.5, d * 0.84, PAL.win, x, y, z); box(w * 0.84, 1.5, d + 0.24, PAL.win, x, y, z); } // glass bands, all four faces
   box(w * 0.6, 2.4, d * 0.6, PAL.roof[Math.floor(vr() * 2)], x, h + 1.2, z);
@@ -332,7 +335,13 @@ for (let z = CH.z0 - 1; z < CH.z1; z += 7) box(0.45, 0.04, 3, PAL.line, 0, 0.03,
   const X0 = -EDGE, X1 = EDGE, bot = -CH.depth, sA = CH.z0 + CH.slope, sB = CH.z1 - CH.slope;
   slab(X0, X1, CH.z0, 0, sA, bot, GRASS); slab(X0, X1, sB, bot, CH.z1, 0, GRASS);           // the two banks
   slab(X0, X1, sA, bot, sB, bot, DIRT);                                                       // the trails along the bottom
-  slab(X0 - 600, X1 + 600, CH.w0, bot + 0.2, CH.w1, bot + 0.2, WATER, { transparent: true, opacity: 0.82 });   // the water, running on out of town
+  { // the water, running on out of town, with ripples that drift along it
+    const c = document.createElement('canvas'); c.width = 128; c.height = 64; const g = c.getContext('2d'); g.fillStyle = '#ffffff'; g.fillRect(0, 0, 128, 64);
+    g.fillStyle = '#9fe6ff'; for (let i = 0; i < 26; i++) g.fillRect((i * 37) % 128, (i * 23) % 64, 14 + (i * 7) % 22, 2);
+    g.fillStyle = '#ffd0a8'; for (let i = 0; i < 10; i++) g.fillRect((i * 53 + 9) % 128, (i * 17 + 5) % 64, 10 + (i * 5) % 12, 2);   // the sunset caught on it
+    waterTex = new THREE.CanvasTexture(c); waterTex.colorSpace = THREE.SRGBColorSpace; waterTex.wrapS = waterTex.wrapT = THREE.RepeatWrapping;
+    slab(X0 - 600, X1 + 600, CH.w0, bot + 0.2, CH.w1, bot + 0.2, WATER, { transparent: true, opacity: 0.86, map: waterTex });
+  }
   const f0 = CH.fordX - CH.fordW, f1 = CH.fordX + CH.fordW;
   slab(f0, f1, CH.w0 - 1, bot + 0.24, CH.w1 + 1, bot + 0.24, GRAVEL);                         // the low-water crossing
   slab(f0, f1, CH.z0, 0.03, sA, bot + 0.03, DIRT); slab(f0, f1, sB, bot + 0.03, CH.z1, 0.03, DIRT);   // dirt ramps down to it
@@ -379,9 +388,47 @@ walls.push({ x0: -400, x1: 400, z0: NORTH, z1: 400 }, { x0: -400, x1: 400, z0: -
 for (let t = -EDGE, i = 0; t < EDGE; t += 6, i++) box(6, 1.4, 1.2, i % 2 ? PAL.kerbA : PAL.kerbB, t + 3, 0.7, -EDGE - 0.6);
 for (let t = -EDGE, i = 0; t < NORTH; t += 6, i++) { if (t + 3 > CH.z0 && t + 3 < CH.z1) continue; for (const s of [-1, 1]) box(1.2, 1.4, 6, i % 2 ? PAL.kerbB : PAL.kerbA, s * (EDGE + 0.6), 0.7, t + 3); }
 for (let i = 0; i < 40; i++) { const a = Math.PI + i / 40 * Math.PI * 1.02 - 0.03, r = 215 + vr() * 110, h = 16 + vr() * 46; box(16 + vr() * 14, h + 6, 16 + vr() * 14, PAL.bld[i % PAL.bld.length], Math.cos(a) * r, h / 2 - 3, Math.sin(a) * r - 20); }
+// ---- Dusk dressing. None of it is solid and none of it moves a wall: the town plays exactly as before.
+let dseed = 4711; const dr = () => (dseed = (dseed * 16807) % 2147483647, (dseed & 0xffff) / 0xffff);   // its own dice, so the layout's dice are untouched
+const pools = [];                                          // warm pools of light on the ground
+for (const [x, z, w, d, h] of blds) { // windows lit for the evening, and clutter on the roofs
+  const floors = Math.max(1, Math.floor((h - 5.5) / 3.3) + 1), n = 7 + Math.floor(dr() * 11);
+  for (let i = 0; i < n; i++) {
+    const y = 4 + Math.floor(dr() * floors) * 3.3, c = [0xffe9a0, 0xffe9a0, 0xffd27a, 0x7df0ff, 0xff8fc7][Math.floor(dr() * 5)], face = Math.floor(dr() * 4), t = (dr() - 0.5) * 0.72;
+    if (y > h - 1.5) continue;
+    if (face < 2) neon(0.12, 1.05, 1.9, c, x + (face ? 1 : -1) * (w / 2 + 0.2), y, z + t * d); else neon(1.9, 1.05, 0.12, c, x + t * w, y, z + (face === 2 ? 1 : -1) * (d / 2 + 0.2));
+  }
+  if (dr() < 0.6) box(2.4, 2.4, 2.4, 0x8a7fb0, x + (dr() - 0.5) * w * 0.35, h + 3.6, z + (dr() - 0.5) * d * 0.35);                     // a water tank
+  if (dr() < 0.55) { const ax = x + (dr() - 0.5) * w * 0.35, az = z + (dr() - 0.5) * d * 0.35; box(0.2, 6.5, 0.2, 0xf2f2ff, ax, h + 5.6, az); neon(0.55, 0.55, 0.55, 0xff2030, ax, h + 9, az); }   // a mast with a red light
+  if (dr() < 0.3) { const sx = dr() < 0.5 ? 1 : -1; box(0.3, 3.4, d * 0.5, 0x24204a, x + sx * w * 0.3, h + 4.1, z); neon(0.36, 2.2, d * 0.42, PAL.neon[Math.floor(dr() * 3)], x + sx * (w * 0.3 + 0.2), h + 4.3, z); }   // a rooftop sign
+}
+for (const nx of NODES) for (const nz of NODES) { // zebra crossings on every arm of every junction
+  for (const [ax, az] of [[0, 1], [0, -1], [1, 0], [-1, 0]]) {
+    const cx = nx + ax * 10.2, cz = nz + az * 10.2;
+    if (Math.abs(cx) > 126 || cz < -126 || (cz > 126 && nx !== 0)) continue;
+    for (let k = -2; k <= 2; k++) { if (ax) box(2.6, 0.04, 1.5, 0xf2f2ff, cx, 0.035, cz + k * 3); else box(1.5, 0.04, 2.6, 0xf2f2ff, cx + k * 3, 0.035, cz); }
+  }
+}
+palms.forEach(([x, z], i) => { if (i % 2 || Math.abs(x) > EDGE || z < -EDGE || z > NORTH) return; neon(0.75, 0.95, 0.75, 0xffc46b, x, 4.6, z); box(0.95, 0.12, 0.95, 0x24204a, x, 5.15, z); pools.push([x, z, 7]); });   // a lantern on every other palm
+for (const s of [-1, 1]) { // the bridge, strung with light
+  neon(0.18, 0.18, CH.z1 - CH.z0, 0x00f0ff, s * (CH.bridgeW + 0.3), 1.2, (CH.z0 + CH.z1) / 2);
+  for (let i = 1; i < 10; i++) { const z = CH.z0 + (CH.z1 - CH.z0) * i / 10, y = 9.5 * (1 - ((z - (CH.z0 + CH.z1) / 2) / ((CH.z1 - CH.z0) / 2)) ** 2) + 1.5; neon(0.5, 0.5, 0.5, 0xffe9a0, s * (CH.bridgeW + 0.3), y, z); }
+}
+for (let z = CH.z0 + 5; z < CH.z1; z += 10) pools.push([0, z, 8]);
+for (const nx of NODES) for (const nz of NODES_Z) pools.push([nx, nz, 11]);                                                     // and a glow at every junction
+{
+  const m = new THREE.InstancedMesh(new THREE.CircleGeometry(1, 20), new THREE.MeshBasicMaterial({ color: 0xffb060, transparent: true, opacity: 0.13, blending: THREE.AdditiveBlending, depthWrite: false }), pools.length), o = new THREE.Object3D();
+  pools.forEach(([x, z, r], i) => { o.position.set(x, 0.11, z); o.rotation.set(-Math.PI / 2, 0, 0); o.scale.set(r, r, 1); o.updateMatrix(); m.setMatrixAt(i, o.matrix); });
+  m.frustumCulled = false; m.renderOrder = 2; scene3.add(m);
+}
 flush(lit, new THREE.MeshLambertMaterial({ flatShading: true }), true); flush(glow, new THREE.MeshBasicMaterial(), false);
 { // the streets' base, and the open water beyond the wall
-  const base = (w, d, z) => { const m = new THREE.Mesh(new THREE.PlaneGeometry(w, d), new THREE.MeshLambertMaterial({ color: PAL.road })); m.rotation.x = -Math.PI / 2; m.position.z = z; m.receiveShadow = true; scene3.add(m); };
+  const rc = document.createElement('canvas'); rc.width = rc.height = 128; const rg = rc.getContext('2d'); rg.fillStyle = '#ffffff'; rg.fillRect(0, 0, 128, 128);   // asphalt: speckle and the odd patch
+  let rs = 99; const rr = () => (rs = (rs * 16807) % 2147483647, (rs & 0xffff) / 0xffff);
+  for (let i = 0; i < 900; i++) { const v = 200 + Math.floor(rr() * 55); rg.fillStyle = `rgb(${v},${v},${v + 4})`; rg.fillRect(rr() * 128, rr() * 128, 1 + rr() * 2, 1 + rr() * 2); }
+  rg.fillStyle = 'rgba(190,186,214,0.5)'; for (let i = 0; i < 5; i++) rg.fillRect(rr() * 110, rr() * 110, 10 + rr() * 22, 6 + rr() * 14);
+  const roadTex = new THREE.CanvasTexture(rc); roadTex.colorSpace = THREE.SRGBColorSpace; roadTex.wrapS = roadTex.wrapT = THREE.RepeatWrapping;
+  const base = (w, d, z) => { const t = roadTex.clone(); t.needsUpdate = true; t.repeat.set(w / 16, d / 16); const m = new THREE.Mesh(new THREE.PlaneGeometry(w, d), new THREE.MeshLambertMaterial({ color: PAL.road, map: t })); m.rotation.x = -Math.PI / 2; m.position.z = z; m.receiveShadow = true; scene3.add(m); };
   base(2 * EDGE + 2, CH.z0 + EDGE + 1, (CH.z0 - EDGE - 1) / 2); base(2 * EDGE + 2, NORTH + 1 - CH.z1, (NORTH + 1 + CH.z1) / 2);
   const sea = new THREE.Mesh(new THREE.PlaneGeometry(3400, 3400), new THREE.MeshLambertMaterial({ color: PAL.ground }));
   sea.rotation.x = -Math.PI / 2; sea.position.y = -CH.depth - 0.1; scene3.add(sea);
@@ -403,6 +450,15 @@ const horizon = new THREE.Group(); scene3.add(horizon);    // the huge low sun a
   const disc = new THREE.Mesh(new THREE.CircleGeometry(250, 48), far(0xfff2a0)); disc.position.set(SUN_DIR.x * 1700, 120, SUN_DIR.z * 1700); disc.lookAt(0, 120, 0); horizon.add(disc);
   for (let i = 0; i < 5; i++) { const b = new THREE.Mesh(new THREE.PlaneGeometry(640, 12 + i * 5), far(0xff5a8a)); b.position.set(SUN_DIR.x * 1690, 8 + i * 40, SUN_DIR.z * 1690); b.lookAt(0, b.position.y, 0); horizon.add(b); }
   for (let i = 0; i < 30; i++) { const a = i / 30 * Math.PI * 2, m = new THREE.Mesh(new THREE.ConeGeometry(150 + vr() * 110, 120 + vr() * 150, 4), far(i % 2 ? 0x3a1f7a : 0x5a2a9a)); m.position.set(Math.cos(a) * 1500, 30, Math.sin(a) * 1500); m.rotation.y = vr() * 3; horizon.add(m); }
+}
+{ // the sky at dusk: first stars, long bands of cloud catching the last light, and a haze round the sun
+  const far = (c, o) => new THREE.MeshBasicMaterial({ color: c, fog: false, depthWrite: false, ...o });
+  const stars = new THREE.InstancedMesh(unitBox, far(0xffffff), 150), o = new THREE.Object3D(); let ss = 31; const sr = () => (ss = (ss * 16807) % 2147483647, (ss & 0xffff) / 0xffff);
+  for (let i = 0; i < 150; i++) { const a = sr() * Math.PI * 2, e = 0.42 + sr() * 1.05, R = 1750, sz = 2 + sr() * 4; o.position.set(Math.cos(a) * Math.cos(e) * R, Math.sin(e) * R, Math.sin(a) * Math.cos(e) * R); o.scale.set(sz, sz, sz); o.rotation.set(0, 0, 0); o.updateMatrix(); stars.setMatrixAt(i, o.matrix); }
+  stars.frustumCulled = false; horizon.add(stars);
+  for (let i = 0; i < 9; i++) { const a = Math.atan2(SUN_DIR.z, SUN_DIR.x) + (sr() - 0.5) * 2.6, R = 1620, y = 150 + sr() * 330, w = 300 + sr() * 520;
+    const m = new THREE.Mesh(new THREE.PlaneGeometry(w, 14 + sr() * 26), far(i % 3 ? 0xff7ab8 : 0xffb46b, { transparent: true, opacity: 0.5, side: THREE.DoubleSide })); m.position.set(Math.cos(a) * R, y, Math.sin(a) * R); m.lookAt(0, y, 0); horizon.add(m); }
+  for (const [r, op] of [[330, 0.22], [460, 0.12]]) { const m = new THREE.Mesh(new THREE.CircleGeometry(r, 40), far(0xffd07a, { transparent: true, opacity: op, blending: THREE.AdditiveBlending })); m.position.set(SUN_DIR.x * 1710, 120, SUN_DIR.z * 1710); m.lookAt(0, 120, 0); horizon.add(m); }
 }
 const sightWalls = walls.concat(posts.map(p => ({ x0: p.x - p.r, x1: p.x + p.r, z0: p.z - p.r, z1: p.z + p.r })));   // what a bot will not try to drive straight through: walls and palm trunks
 const sightWallsBank = sightWalls.concat(lowWalls);         // and, unless it is looking straight along the bridge, the abutments under it
@@ -460,6 +516,12 @@ function buildVehicle(kind, tint) {
   if (kind !== 'hum') { part(Wd + 0.2, 0.5, 0.5, 0x333344, 0, wy + 0.1, L / 2 + 0.1); part(Wd + 0.2, 0.5, 0.5, 0x333344, 0, wy + 0.1, -L / 2 - 0.1); }
   const ww = kind === 'hum' ? 0.8 : 0.55, wheelG = new THREE.CylinderGeometry(wr, wr, ww, 10), hubG = new THREE.CylinderGeometry(wr * 0.5, wr * 0.5, ww + 0.05, 8), wm = lam(0x1c1c24), hm = lam(kind === 'hum' ? 0x8f7d3e : 0xffd400);
   for (const sx of [-1, 1]) for (const sz of [-1, 1]) for (const [geo, m] of [[wheelG, wm], [hubG, hm]]) { const w = new THREE.Mesh(geo, m); w.rotation.z = Math.PI / 2; w.position.set(sx * Wd / 2, wr, sz * L * 0.32); w.castShadow = true; g.add(w); }
+  { // lights on for the evening: white at the nose, red at the tail, and a beam on the road ahead
+    const nose = L / 2 + (kind === 'hum' ? 0.56 : 0.36), ly = wy + (kind === 'cop' || kind === 'civ' ? 0.5 : 0.75), white = new THREE.MeshBasicMaterial({ color: 0xfff6d8 }), red = new THREE.MeshBasicMaterial({ color: 0xff2030 });
+    for (const sx of [-1, 1]) { part(0.55, 0.32, 0.12, 0, sx * (Wd / 2 - 0.45), ly, nose, white); part(0.6, 0.28, 0.12, 0, sx * (Wd / 2 - 0.45), ly, -nose, red); }
+    const beam = new THREE.Mesh(new THREE.PlaneGeometry(Wd + 1.6, 11), new THREE.MeshBasicMaterial({ color: 0xfff0c0, transparent: true, opacity: kind === 'civ' ? 0.08 : 0.14, blending: THREE.AdditiveBlending, depthWrite: false }));
+    beam.rotation.x = -Math.PI / 2; beam.position.set(0, 0.14, nose + 5.6); beam.renderOrder = 3; g.add(beam);
+  }
   g.rotation.order = 'YXZ'; g.userData = { lights, roof, amber: kind === 'hum' }; scene3.add(g); return g;
 }
 const CIV_TINTS = [0xffc93c, 0x7dff5a, 0xff8fc7, 0x00d2ff, 0xff9a3d, 0xb9a0ff];
@@ -476,17 +538,19 @@ const PICKUPS = [];
   for (const [x, z] of [[0, 0], [-60, 60], [60, -60], [-60, -60], [0, -120], [-120, 0], [120, 0], [-60, 180], [120, 180]]) PICKUPS.push({ x, z, layer: null, route: 'paved' });
   PICKUPS.push({ x: 0, z: (CH.z0 + CH.z1) / 2, layer: 'deck', route: 'paved' });                                        // the middle of the bridge
   for (const [x, z] of [[CH.fordX, 150], [-45, 142.5], [-95, 157.5], [105, 142.5]]) PICKUPS.push({ x, z, layer: 'low', route: 'dirt' });   // the low-water crossing and the bank trails
+  for (const [x, z, layer] of [[60, 60, null], [-60, -120, null], [-120, 120, null], [120, -120, null], [0, 180, null], [30, 12, null], [20, 157.5, 'low']]) PICKUPS.push({ x, z, layer, route: layer ? 'dirt' : 'paved', type: 'health' });   // first aid: on the streets, the plaza, downtown and under the bridge
   let lawns = 0;
   for (const bx of BCEN) for (const bz of BCEN) { if (lawns >= 4 || (bx === PLAZA.x && bz === PLAZA.z) || (bx + bz) % 120 !== 0) continue; if (clear(bx, bz + 18.5)) { PICKUPS.push({ x: bx, z: bz + 18.5, layer: null, route: 'dirt' }); lawns++; } }
 }
 const crateMeshes = PICKUPS.map(p => {
   const g = new THREE.Group(), y = (p.layer === 'low' ? bankY(p.z) : 0) + 1.5;
-  const body = new THREE.Mesh(unitBox, new THREE.MeshBasicMaterial({ color: 0xffe14a })); body.scale.set(1.7, 1.7, 1.7); g.add(body);
-  for (const r of [0, Math.PI / 2]) { const band = new THREE.Mesh(unitBox, new THREE.MeshBasicMaterial({ color: 0x1a1a6e })); band.scale.set(1.78, 0.4, 1.78); band.rotation.z = r; g.add(band); }
-  const ring = new THREE.Mesh(new THREE.RingGeometry(2.1, 2.6, 20), new THREE.MeshBasicMaterial({ color: 0xffe14a, transparent: true, opacity: 0.6, side: THREE.DoubleSide, depthWrite: false })); ring.rotation.x = -Math.PI / 2; ring.position.y = -1.25; g.add(ring);
+  const med = p.type === 'health';                           // ammo: a yellow crate with dark bands. Health: a white one with a red cross, on a green ring
+  const body = new THREE.Mesh(unitBox, new THREE.MeshBasicMaterial({ color: med ? 0xffffff : 0xffe14a })); body.scale.set(1.7, 1.7, 1.7); g.add(body);
+  for (const r of [0, Math.PI / 2]) { const band = new THREE.Mesh(unitBox, new THREE.MeshBasicMaterial({ color: med ? 0xff2d3a : 0x1a1a6e })); band.scale.set(med ? 1.8 : 1.78, med ? 0.5 : 0.4, med ? 1.8 : 1.78); band.rotation.z = r; g.add(band); }
+  const ring = new THREE.Mesh(new THREE.RingGeometry(2.1, 2.6, 20), new THREE.MeshBasicMaterial({ color: med ? 0x7dff5a : 0xffe14a, transparent: true, opacity: 0.6, side: THREE.DoubleSide, depthWrite: false })); ring.rotation.x = -Math.PI / 2; ring.position.y = -1.25; g.add(ring);
   g.position.set(p.x, y, p.z); g.visible = false; g.userData.y = y; scene3.add(g); return g;
 });
-const boltMeshes = Array.from({ length: 64 }, () => { const m = new THREE.Mesh(unitBox, new THREE.MeshBasicMaterial({ color: 0x7df0ff })); m.scale.set(0.42, 0.42, 3.2); m.visible = false; scene3.add(m); return m; });
+const boltMeshes = Array.from({ length: 64 }, () => { const m = new THREE.Mesh(unitBox, new THREE.MeshBasicMaterial({ color: 0x7df0ff, blending: THREE.AdditiveBlending, transparent: true })); m.scale.set(0.55, 0.55, 4.4); m.visible = false; scene3.add(m); return m; });
 
 // The patient nobody wants: a scowling head, a shaking fist and a hospital gown flapping behind.
 const patient = new THREE.Group(); scene3.add(patient);
@@ -518,6 +582,10 @@ const marker = (() => {
 // puffs: tyre smoke, splashes and crash sparks
 const puffs = [];
 for (let i = 0; i < 96; i++) { const m = new THREE.Mesh(unitBox, new THREE.MeshBasicMaterial({ color: 0xffc9a0, transparent: true, opacity: 0, depthWrite: false })); m.visible = false; scene3.add(m); puffs.push({ m, life: 0 }); }
+// tyre marks: a drift on the pavement leaves rubber behind, for a few seconds
+const skids = Array.from({ length: 90 }, () => { const m = new THREE.Mesh(unitBox, new THREE.MeshBasicMaterial({ color: 0x120c26, transparent: true, opacity: 0, depthWrite: false })); m.scale.set(0.5, 0.02, 1.7); m.visible = false; m.renderOrder = 1; scene3.add(m); return { m, t0: -99 }; });
+let skidI = 0;
+function skid(x, y, z, h) { if (REPLAY) return; const k = skids[skidI = (skidI + 1) % skids.length]; k.t0 = state.t; k.m.position.set(x, y + 0.07, z); k.m.rotation.y = h; k.m.visible = true; }
 let puffI = 0;
 function puff(x, y, z, vx, vy, vz, size, life, color) {
   if (REPLAY) return;
@@ -705,9 +773,9 @@ function tagBrain(v) {
 }
 
 // ---- Battle Royale: get ammo when dry, pick a fight it can win, line the shot up, know when to quit
-function nearestCrate(v) {
+function nearestCrate(v, type = 'ammo') {
   let best = null, bestD = 1e9;
-  for (const p of state.pickups) { if (p.wait > 0) continue; const d = Math.hypot(p.x - v.x, p.z - v.z) + (p.layer && p.layer !== v.layer ? 25 : 0); if (d < bestD) { bestD = d; best = p; } }
+  for (const p of state.pickups) { if (p.wait > 0 || (p.type || 'ammo') !== type) continue; const d = Math.hypot(p.x - v.x, p.z - v.z) + (p.layer && p.layer !== v.layer ? 25 : 0); if (d < bestD) { bestD = d; best = p; } }
   return best && { p: best, d: bestD };
 }
 function battleBrain(v) {
@@ -722,8 +790,10 @@ function battleBrain(v) {
       const why = !b.prey.active ? 'gone' : b.chaseT > tune.bot_break_off ? 'too long without a hit' : d > 170 ? 'too far' : (v.hp <= 30 && b.prey.hp > v.hp + 30) ? 'outmatched' : '';
       if (why) { if (why !== 'gone') { b.shun = b.prey; b.shunT = 7; events.push({ t: state.t, breakOff: [v.i, b.prey.i, why] }); } b.prey = null; b.chaseT = 0; b.seen = null; }
     }
+    const med = v.hp <= tune.bot_heal_below ? nearestCrate(v, 'health') : null;
     const dry = v.ammo === 0, low = v.ammo <= 2 && crate && crate.d < 45, hurtAndShort = v.hp <= 30 && v.ammo < tune.br_ammo_max / 2;
-    if (crate && (dry || low || (hurtAndShort && !b.prey))) { if (b.goal !== 'ammo' && dry) events.push({ t: state.t, seekAmmo: [v.i] }); b.goal = 'ammo'; b.crate = crate.p; b.prey = null; b.seen = null; }
+    if (med && med.d < 120) { if (b.goal !== 'heal') events.push({ t: state.t, seekHealth: [v.i] }); b.goal = 'heal'; b.crate = med.p; b.prey = null; b.seen = null; }   // badly hurt and first aid in reach: go and get it
+    else if (crate && (dry || low || (hurtAndShort && !b.prey))) { if (b.goal !== 'ammo' && dry) events.push({ t: state.t, seekAmmo: [v.i] }); b.goal = 'ammo'; b.crate = crate.p; b.prey = null; b.seen = null; }
     else if (v.ammo > 0 && foes.length) {
       let best = null, bestS = 1e9;
       for (const o of foes) {
@@ -735,7 +805,7 @@ function battleBrain(v) {
       b.seen = { x: best.x, z: best.z, vx: best.vx, vz: best.vz, err: (rng() - 0.5) * 2 * tune.bot_aim_error };
     } else b.goal = 'roam';
   }
-  if (b.goal === 'ammo' && b.crate && b.crate.wait <= 0) return navTo(v, b.crate.x, b.crate.z, b.crate.layer);
+  if ((b.goal === 'ammo' || b.goal === 'heal') && b.crate && b.crate.wait <= 0) return navTo(v, b.crate.x, b.crate.z, b.crate.layer);
   if (b.goal === 'fight' && b.prey && b.prey.active && b.seen) {
     b.chaseT += STEP;
     const p = b.prey, sn = b.seen, d = Math.hypot(p.x - v.x, p.z - v.z), flight = d / tune.br_shot_speed;
@@ -917,6 +987,7 @@ function drive(v, dt) {
   v.drift = Math.abs(wl) > 3.5;
   v.vx = fx * vf + lx * wl; v.vz = fz * vf + lz * wl;
   v.x += v.vx * dt; v.z += v.vz * dt;
+  if (v.i < NR && v.drift && surf === 'road' && sp > 8) { const hw = KINDS[v.kind].wid / 2, bx = v.x - fx * KINDS[v.kind].len * 0.32, bz = v.z - fz * KINDS[v.kind].len * 0.32; skid(bx + fz * hw, v.y, bz - fx * hw, v.h); skid(bx - fz * hw, v.y, bz + fx * hw, v.h); }
   if (v.i < NR && sp > 5) {
     v.smoke -= dt;
     if (v.smoke <= 0 && (v.drift || surf !== 'road')) { v.smoke = surf === 'water' ? 0.04 : 0.07; puff(v.x - fx * 2.4 + (rng() - 0.5) * 2, v.y + 0.5, v.z - fz * 2.4 + (rng() - 0.5) * 2, 0, surf === 'water' ? 5 : 1.6, 0, surf === 'water' ? 0.45 : 1.1, 0.6, surf === 'water' ? 0xbfefff : surf === 'dirt' && !v.drift ? 0xd9a868 : 0xffc9a0); }
@@ -1059,12 +1130,19 @@ function battleStep(dt) {
     sh.gone = gone;
   }
   state.shots = state.shots.filter(sh => !sh.gone);
-  // crates: drive over one to load up; it comes back after a while
+  // crates: drive over one to load up or patch up; it comes back after a while
   state.pickups.forEach((p, n) => {
     if (p.wait > 0) { p.wait -= dt; return; }
-    for (const v of rigs()) if (v.ammo < tune.br_ammo_max && (v.layer || null) === p.layer && Math.hypot(v.x - p.x, v.z - p.z) < 3.8) {
-      const got = Math.min(tune.br_pickup_ammo, tune.br_ammo_max - v.ammo); v.ammo += got; p.wait = tune.br_pickup_respawn; events.push({ t: state.t, pickup: [v.i, n] });
-      if (v.i === ME) { state.pop = `+${got} AMMO`; state.popT = 1.2; tone(880, 0.07, 'square', 0.2); tone(1320, 0.12, 'square', 0.2); }
+    const med = p.type === 'health';
+    for (const v of rigs()) if ((med ? v.hp < tune.br_hp : v.ammo < tune.br_ammo_max) && (v.layer || null) === p.layer && Math.hypot(v.x - p.x, v.z - p.z) < 3.8) {
+      if (med) {
+        const got = Math.min(tune.br_health_amount, tune.br_hp - v.hp); v.hp += got; p.wait = tune.br_health_respawn; events.push({ t: state.t, heal: [v.i, n, Math.round(got)] });
+        for (let i = 0; i < 8; i++) puff(v.x + (rng() - 0.5) * 3, v.y + 1 + rng() * 2, v.z + (rng() - 0.5) * 3, 0, 5 + rng() * 4, 0, 0.4, 0.6, 0x7dff5a);
+        if (v.i === ME) { state.pop = `+${Math.round(got)} HEALTH`; state.popT = 1.4; tone(660, 0.1, 'sine', 0.25); tone(990, 0.2, 'sine', 0.25); }
+      } else {
+        const got = Math.min(tune.br_pickup_ammo, tune.br_ammo_max - v.ammo); v.ammo += got; p.wait = tune.br_pickup_respawn; events.push({ t: state.t, pickup: [v.i, n] });
+        if (v.i === ME) { state.pop = `+${got} AMMO`; state.popT = 1.2; tone(880, 0.07, 'square', 0.2); tone(1320, 0.12, 'square', 0.2); }
+      }
       break;
     }
   });
@@ -1178,6 +1256,7 @@ function place(alpha) { // meshes follow the simulation, between the last two st
     }
   }
   safeRings.forEach((r, i) => { if (!state.vehicles[i].active) r.visible = false; });
+  for (const k of skids) { if (!k.m.visible) continue; const left = 1 - (state.t - k.t0) / 5; if (left <= 0 || left > 1) k.m.visible = false; else k.m.material.opacity = left * 0.5; }
   crateMeshes.forEach((g, n) => { const p = state.pickups[n]; g.visible = br && !!p && p.wait <= 0; if (g.visible) { g.rotation.y = state.t * 1.6 + n; g.position.y = g.userData.y + Math.sin(state.t * 3 + n) * 0.25; } });
   boltMeshes.forEach((m, n) => { const sh = br && state.shots[n]; m.visible = !!sh; if (sh) { m.position.set(sh.x, sh.y, sh.z); m.rotation.y = Math.atan2(sh.vx, sh.vz); m.material.color.set(sh.owner === ME ? 0x7df0ff : 0xff6ab0); } });
   const tagOn = state.it >= 0; patient.visible = marker.visible = tagOn;
@@ -1196,6 +1275,7 @@ function place(alpha) { // meshes follow the simulation, between the last two st
   for (const q of puffs) { if (q.life <= 0) { q.m.visible = false; continue; } const k = q.life / q.max, s = q.size * (q.size < 0.5 ? 1 : 2.4 - k * 1.4); q.m.position.set(q.x, q.y, q.z); q.m.scale.set(s, s, s); q.m.rotation.set(q.x, q.y * 3, q.z); q.m.material.opacity = k * 0.8; }
 }
 function render() {
+  if (waterTex) waterTex.offset.x = state.t * 0.025;          // the bayou drifts east
   horizon.position.set(cam.position.x, 0, cam.position.z);
   const p = meshes[ME].position; sun.target.position.set(p.x, 0, p.z); sun.position.set(p.x + SUN_DIR.x * 190, SUN_DIR.y * 190, p.z + SUN_DIR.z * 190);
   renderer.render(scene3, cam);
@@ -1237,7 +1317,7 @@ function minimap(mx, my, ms) {
   ctx.fillStyle = '#f2f2ff'; { const [ax, az] = mp(CH.bridgeW, CH.z1); ctx.fillRect(ax, az, CH.bridgeW * 2 * k, (CH.z1 - CH.z0) * k); }           // the bridge
   ctx.fillStyle = '#6a5a9a';
   for (const w of walls) { if (w.x1 - w.x0 > 100 || w.z1 - w.z0 > 100) continue; const [ax, az] = mp(w.x1, w.z1); ctx.fillRect(ax, az, (w.x1 - w.x0) * k, (w.z1 - w.z0) * k); }
-  if (MODE === 'br') { ctx.fillStyle = '#ffe14a'; for (const p of state.pickups) if (p.wait <= 0) { const [ax, az] = mp(p.x, p.z); ctx.fillRect(ax - 2.5, az - 2.5, 5, 5); } }   // ammo crates
+  if (MODE === 'br') for (const p of state.pickups) if (p.wait <= 0) { const [ax, az] = mp(p.x, p.z); if (p.type === 'health') { ctx.fillStyle = '#fff'; ctx.fillRect(ax - 3.5, az - 3.5, 7, 7); ctx.fillStyle = '#ff2d3a'; ctx.fillRect(ax - 3, az - 1, 6, 2); ctx.fillRect(ax - 1, az - 3, 2, 6); } else { ctx.fillStyle = '#ffe14a'; ctx.fillRect(ax - 2.5, az - 2.5, 5, 5); } }   // crates: yellow for ammo, a red cross for health
   const vs = state.vehicles;
   for (let i = vs.length - 1; i >= 0; i--) { const v = vs[i]; if (!v.active) continue; const [ax, az] = mp(v.x, v.z); icon(v.kind, ax, az, i < NR ? 6 : 3.5, i === state.it); }
 }
@@ -1258,7 +1338,7 @@ function brHud() { // Battle Royale: clock, wrecks, your health and ammo, rivals
       if (state.hitMark > 0) { ctx.strokeStyle = '#fff'; ctx.lineWidth = 5; ctx.beginPath(); for (const [a, b] of [[-1, -1], [1, -1], [-1, 1], [1, 1]]) { ctx.moveTo(f.x + a * 10, f.y + b * 10); ctx.lineTo(f.x + a * 26, f.y + b * 26); } ctx.stroke(); }
     }
   }
-  const status = !me.active ? `WRECKED: BACK IN ${Math.max(0, me.dead).toFixed(1)} s` : me.shield > 0 ? `PROTECTED ${me.shield.toFixed(1)} s (ENDS IF YOU FIRE)` : me.ammo === 0 ? 'NO AMMO: GRAB A YELLOW CRATE' : '';
+  const status = !me.active ? `WRECKED: BACK IN ${Math.max(0, me.dead).toFixed(1)} s` : me.shield > 0 ? `PROTECTED ${me.shield.toFixed(1)} s (ENDS IF YOU FIRE)` : me.hp <= tune.br_hp * 0.4 ? 'LOW HEALTH: FIND A RED CROSS CRATE' : me.ammo === 0 ? 'NO AMMO: GRAB A YELLOW CRATE' : '';
   const statusBg = !me.active ? 'rgba(160,20,60,0.92)' : me.shield > 0 ? 'rgba(20,90,120,0.92)' : 'rgba(255,225,74,0.96)', statusInk = !me.active || me.shield > 0 ? '#fff' : PAL.ink;
   const hpBar = (x, y, w, h, fs) => { panel(x - 3, y - 3, w + 6, h + 6); panel(x, y, w * clamp(me.hp / tune.br_hp, 0, 1), h, me.hp > 50 ? '#3fbf3a' : me.hp > 25 ? '#d9a800' : '#e0304a'); text(`HEALTH ${Math.max(0, Math.ceil(me.hp))}`, x + w / 2, y + h / 2 + 1, fs, '#fff'); };
   if (PH) { // a phone: fewer things, much bigger, all at the top so the thumbs own the bottom
@@ -1283,11 +1363,12 @@ function brHud() { // Battle Royale: clock, wrecks, your health and ammo, rivals
     if (state.msgT > 0) { ctx.globalAlpha = Math.min(1, state.msgT * 2); panel(W / 2 - 400, 92, 800, 40); text(state.msg, W / 2, 112, 20, '#fff'); ctx.globalAlpha = 1; }
   }
   if (state.popT > 0 && state.pop) { const y = PH ? 250 : 190, fs = PH ? 44 : 36; text(state.pop, W / 2 + 3, y + 3, fs, PAL.ink); text(state.pop, W / 2, y, fs, PAL.it); }
-  if (me.active && me.ammo === 0) { // out of ammo: an arrow to the nearest crate
-    const cr = nearestCrate(me);
+  const need = !me.active ? null : me.hp <= tune.br_hp * 0.4 ? 'health' : me.ammo === 0 ? 'ammo' : null;
+  if (need) { // hurt, or out of ammo: an arrow to the nearest crate of the right kind
+    const cr = nearestCrate(me, need);
     if (cr) { const s = toScreen(cr.p.x, 2, cr.p.z); let dx = s.x - W / 2, dy = s.y - H / 2; if (s.behind) { dx = -dx; dy = Math.abs(dy) + 200; }
       if (s.behind || s.x < 40 || s.x > W - 40 || s.y < 40 || s.y > H - 40) { const a = Math.atan2(dy, dx), ex = clamp(W / 2 + Math.cos(a) * 900, PH ? 270 : 70, W - (PH ? 250 : 70)), ey = clamp(H / 2 + Math.sin(a) * 900, PH ? 230 : 160, H - 150);
-        ctx.save(); ctx.translate(ex, ey); ctx.rotate(a); ctx.fillStyle = PAL.it; ctx.strokeStyle = PAL.ink; ctx.lineWidth = 4; ctx.beginPath(); ctx.moveTo(30, 0); ctx.lineTo(-16, -22); ctx.lineTo(-6, 0); ctx.lineTo(-16, 22); ctx.closePath(); ctx.stroke(); ctx.fill(); ctx.restore(); } }
+        ctx.save(); ctx.translate(ex, ey); ctx.rotate(a); ctx.fillStyle = need === 'health' ? '#7dff5a' : PAL.it; ctx.strokeStyle = PAL.ink; ctx.lineWidth = 4; ctx.beginPath(); ctx.moveTo(30, 0); ctx.lineTo(-16, -22); ctx.lineTo(-6, 0); ctx.lineTo(-16, 22); ctx.closePath(); ctx.stroke(); ctx.fill(); ctx.restore(); } }
   }
   if (touch.on) touchHud();
   if (state.phase === 'countdown') { const n = Math.ceil(state.count * 3 / Math.max(tune.countdown, 0.01)); panel(W / 2 - 90, H / 2 - 110, 180, 120); text(String(clamp(n, 1, 3)), W / 2, H / 2 - 50, 96, PAL.it); }
@@ -1357,7 +1438,11 @@ function touchHud() { // the thumb controls, drawn: a round directional pad on t
   if (!held) text('PUSH TO DRIVE', bx, by - R - 52, 18, '#fff');
   if (innerHeight > innerWidth) { panel(W / 2 - 330, H / 2 - 40, 660, 80, 'rgba(255,225,74,0.95)'); text('Turn your phone sideways', W / 2, H / 2, 40, PAL.ink); }
 }
-function drawPlay() { ctx.clearRect(-EX, -EY, W + 2 * EX, H + 2 * EY); place(ALPHA); chaseCam(ALPHA); render(); hud(); }
+function vignette() { // the corners fall away into the evening
+  const g = ctx.createRadialGradient(W / 2, H / 2, H * 0.42, W / 2, H / 2, H * 0.72 + EX); g.addColorStop(0, 'rgba(14,6,44,0)'); g.addColorStop(1, 'rgba(14,6,44,0.5)');
+  ctx.fillStyle = g; ctx.fillRect(-EX, -EY, W + 2 * EX, H + 2 * EY);
+}
+function drawPlay() { ctx.clearRect(-EX, -EY, W + 2 * EX, H + 2 * EY); place(ALPHA); chaseCam(ALPHA); render(); vignette(); hud(); }
 function shade(a = 0.6) { ctx.fillStyle = `rgba(20,12,48,${a})`; ctx.fillRect(-EX, -EY, W + 2 * EX, H + 2 * EY); }
 function boardLines(y) { // the scoreboard on the between-round and results screens: two columns for a big field
   const R = rigs(), two = R.length > 4, per = two ? Math.ceil(R.length / 2) : R.length;

@@ -100,6 +100,7 @@ window.CONFIG = {
   bot_react: { value: 0.6, min: 0.05, max: 1.5, step: 0.05 },    // seconds between a bot's looks at its target: what it aims at is that old
   bot_aim_error: { value: 0.17, min: 0, max: 0.3, step: 0.01 },  // radians a bot's aim may be off, either side, re-rolled at each look
   bot_fire_range: { value: 55, min: 15, max: 110, step: 5 },     // metres inside which a bot will shoot
+  bot_heal_below: { value: 45, min: 0, max: 100, step: 5 },       // health at or under which a bot goes looking for a red cross crate
   bot_break_off: { value: 10, min: 2, max: 30, step: 1 },         // seconds a bot hunts one rig without hurting it before it gives up
 
   // ---- Battle Royale ------------------------------------------------------------------------
@@ -110,6 +111,8 @@ window.CONFIG = {
   br_ammo_max: { value: 12, min: 1, max: 60, step: 1 },          // bolts a rig can carry
   br_pickup_ammo: { value: 6, min: 1, max: 30, step: 1 },        // bolts in a crate
   br_pickup_respawn: { value: 9, min: 1, max: 60, step: 1 },     // seconds before a crate comes back
+  br_health_amount: { value: 40, min: 5, max: 200, step: 5 },      // health in a red cross crate
+  br_health_respawn: { value: 14, min: 1, max: 90, step: 1 },    // seconds before a health crate comes back
   br_fire_cooldown: { value: 0.35, min: 0.05, max: 2, step: 0.05 }, // seconds between bolts, for bots and you alike
   br_shot_speed: { value: 75, min: 30, max: 150, step: 5 },      // m/s
   br_shot_life: { value: 1.3, min: 0.3, max: 4, step: 0.1 },     // seconds a bolt flies
