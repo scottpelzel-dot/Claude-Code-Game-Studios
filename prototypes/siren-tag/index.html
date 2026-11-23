@@ -5,7 +5,10 @@
 <html lang="en">
 <head>
 <meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
 <title>Crash Out: Houston Edition</title>
 <style>
   html { box-sizing: border-box; }
@@ -13,7 +16,8 @@
   body { font-variant-numeric: tabular-nums; }
   #wrap { position: relative; margin: 0 auto; }
   canvas { display: block; position: absolute; left: 0; top: 0; }
-  #wrap input { position: absolute; box-sizing: border-box; display: none; text-align: center; font: 700 18px Arial, sans-serif; border: 3px solid #ffe14a; border-radius: 6px;
+  #hudbox { position: absolute; pointer-events: none; }
+  #hudbox input { pointer-events: auto; position: absolute; box-sizing: border-box; display: none; text-align: center; font: 700 18px Arial, sans-serif; border: 3px solid #ffe14a; border-radius: 6px;
     background: #1a1a6e; color: #fff; user-select: text; -webkit-user-select: text; touch-action: auto; }
   #invite { left: 20%; top: 27.2%; width: 52%; height: 6.6%; }
   #roomcode { left: 37%; top: 43%; width: 26%; height: 13%; text-transform: uppercase; letter-spacing: 0.2em; }
@@ -21,7 +25,7 @@
 </head>
 <body>
 <div id="wrap"><canvas id="gl"></canvas><canvas id="game"></canvas>
-<input id="invite" readonly aria-label="Invite link"><input id="roomcode" maxlength="4" autocapitalize="characters" autocomplete="off" spellcheck="false" aria-label="Room code"></div>
+<div id="hudbox"><input id="invite" readonly aria-label="Invite link"><input id="roomcode" maxlength="4" autocapitalize="characters" autocomplete="off" spellcheck="false" aria-label="Room code"></div></div>
 <script src="vendor/three.js"></script>
 <script src="config.js"></script>
 <script>
@@ -55,7 +59,8 @@ const canvas = document.getElementById('game');
 const ctx = canvas.getContext('2d');
 const renderer = new THREE.WebGLRenderer({ canvas: document.getElementById('gl'), antialias: !CHEAP });
 renderer.shadowMap.enabled = !CHEAP; renderer.shadowMap.type = THREE.PCFSoftShadowMap;
-let viewW = W; // the game's width on screen, in CSS pixels: a narrow one gets the phone HUD
+let viewW = W; // the HUD's width on screen, in CSS pixels: a narrow one gets the phone HUD
+let SCALE = 1, EX = 0, EY = 0, camReady = false;
 function fit() { // fills the window at any size and pixel ratio
   // The room actually on offer: the visible window, less any padding the host page keeps clear for
   // its own bars (a phone's safe areas, an app's close and share buttons).
@@ -68,14 +73,18 @@ function fit() { // fills the window at any size and pixel ratio
   }
   const s = Math.max(0.1, Math.min(availW / W, availH / H));
   const r = s * (devicePixelRatio || 1);
-  canvas.width = Math.round(W * r); canvas.height = Math.round(H * r);
-  const cw = Math.round(W * s), ch = Math.round(H * s); viewW = cw;
-  canvas.style.width = cw + 'px'; canvas.style.height = ch + 'px';
-  wrap.style.width = cw + 'px'; wrap.style.height = ch + 'px';
-  wrap.style.marginTop = Math.max(0, Math.floor((availH - ch) / 2)) + 'px';
-  ctx.setTransform(r, 0, 0, r, 0, 0);
-  renderer.setPixelRatio(CHEAP ? 0.5 : Math.min(devicePixelRatio || 1, 2));
-  renderer.setSize(cw, ch, true);
+  // The town is drawn across the whole of that room, edge to edge. The HUD keeps its 16:9 layout,
+  // centred, with EX and EY logical units of spare view either side of it.
+  const aw = Math.max(1, Math.floor(availW)), ah = Math.max(1, Math.floor(availH)), ox = (aw - W * s) / 2, oy = (ah - H * s) / 2, dpr = devicePixelRatio || 1;
+  SCALE = s; EX = ox / s; EY = oy / s; viewW = W * s;
+  canvas.width = Math.round(aw * dpr); canvas.height = Math.round(ah * dpr);
+  canvas.style.width = aw + 'px'; canvas.style.height = ah + 'px';
+  wrap.style.width = aw + 'px'; wrap.style.height = ah + 'px'; wrap.style.marginTop = '0px';
+  const hb = document.getElementById('hudbox').style; hb.left = ox + 'px'; hb.top = oy + 'px'; hb.width = W * s + 'px'; hb.height = H * s + 'px';
+  ctx.setTransform(r, 0, 0, r, ox * dpr, oy * dpr);
+  renderer.setPixelRatio(CHEAP ? 0.5 : Math.min(dpr, 2));
+  renderer.setSize(aw, ah, true);
+  if (camReady) { cam.aspect = aw / ah; cam.updateProjectionMatrix(); }
   document.getElementById('invite').style.fontSize = 17 * s + 'px'; document.getElementById('roomcode').style.fontSize = 52 * s + 'px';
 }
 function text(s, x, y, size, c, align = 'center') {
@@ -118,9 +127,9 @@ const BTN_BR = { // FIRE sits under the right thumb, DRIFT beside it
   fire: { x: W - 124, y: H - 140, r: 80, label: 'FIRE' }, drift: { x: W - 300, y: H - 84, r: 56, label: 'DRIFT' },
   pause: BTN_TAG.pause, reset: BTN_TAG.reset,
 };
-const btns = () => MODE === 'br' ? BTN_BR : BTN_TAG;
+const btns = () => { const src = MODE === 'br' ? BTN_BR : BTN_TAG, out = {}; for (const k in src) out[k] = { ...src[k], x: src[k].x + EX * 0.7 }; return out; };   // out towards the real edge of a wide screen
 const touchHeld = k => { for (const v of touch.held.values()) if (v === k) return true; return false; };
-function toLogical(e) { const r = canvas.getBoundingClientRect(); return [(e.clientX - r.left) / r.width * W, (e.clientY - r.top) / r.height * H]; }
+function toLogical(e) { const r = canvas.getBoundingClientRect(); return [(e.clientX - r.left) / SCALE - EX, (e.clientY - r.top) / SCALE - EY]; }
 addEventListener('pointerdown', e => {
   if (e.pointerType !== 'touch') return;
   touch.on = true; if (scene !== 'play') return;
@@ -237,7 +246,7 @@ function surfaceAt(v) { // 'road', 'dirt' (grass lots and the banks) or 'water'
   return 'dirt';
 }
 const scene3 = new THREE.Scene();
-const cam = new THREE.PerspectiveCamera(58, W / H, 0.3, 2400);
+const cam = new THREE.PerspectiveCamera(58, W / H, 0.3, 2400); camReady = true;
 { // the sunset sky
   const c = document.createElement('canvas'); c.width = 4; c.height = 512; const g = c.getContext('2d');
   const gr = g.createLinearGradient(0, 0, 0, 512); PAL.sky.forEach(([p, col]) => gr.addColorStop(p, col));
@@ -1200,7 +1209,7 @@ function chaseCam(alpha) {
   cam.position.set(p.x - fx * cd * k + jx, p.y + chh * (0.55 + 0.45 * k) + jy, p.z - fz * cd * k);
   cam.lookAt(p.x + fx * 7, p.y + 2.4, p.z + fz * 7);
 }
-function toScreen(x, y, z) { v3.set(x, y, z).project(cam); return { x: (v3.x + 1) / 2 * W, y: (1 - v3.y) / 2 * H, behind: v3.z > 1 }; }
+function toScreen(x, y, z) { v3.set(x, y, z).project(cam); return { x: W / 2 + v3.x * (W / 2 + EX), y: H / 2 - v3.y * (H / 2 + EY), behind: v3.z > 1 }; }
 function icon(kind, x, y, s, isIt) { // a drawn pip for each vehicle, its own shape
   ctx.save(); ctx.translate(x, y);
   if (isIt) { ctx.fillStyle = PAL.it; ctx.beginPath(); ctx.arc(0, 0, s * 1.6, 0, 7); ctx.fill(); }
@@ -1331,12 +1340,12 @@ function hud() {
   if (touch.on) touchHud();
   if (state.phase === 'countdown') { const n = Math.ceil(state.count * 3 / Math.max(tune.countdown, 0.01)); panel(W / 2 - 90, H / 2 - 110, 180, 120); text(String(clamp(n, 1, 3)), W / 2, H / 2 - 50, 96, PAL.it); }
   if (NET && NET.client) netHud(PH);
-  if (state.flash > 0) { ctx.fillStyle = `rgba(255,225,74,${state.flash * 1.2})`; ctx.fillRect(0, 0, W, H); }
+  if (state.flash > 0) { ctx.fillStyle = `rgba(255,225,74,${state.flash * 1.2})`; ctx.fillRect(-EX, -EY, W + 2 * EX, H + 2 * EY); }
 }
 function touchHud() { // the thumb controls, drawn: a round directional pad on the left, buttons on the right
   const ring = (x, y, r, fill, line) => { ctx.beginPath(); ctx.arc(x, y, r, 0, 7); ctx.fillStyle = fill; ctx.fill(); ctx.lineWidth = 4; ctx.strokeStyle = line; ctx.stroke(); };
   for (const k in btns()) { const b = btns()[k], on = touchHeld(k); ring(b.x, b.y, b.r, on ? 'rgba(255,225,74,0.9)' : 'rgba(20,12,48,0.6)', on ? PAL.ink : '#fff'); text(b.label, b.x, b.y, b.r > 40 ? 26 : 16, on ? PAL.ink : '#fff'); }
-  const held = touch.steerId !== null, bx = held ? touch.x0 : PAD.x, by = held ? touch.y0 : PAD.y, R = tune.touch_pad_range;
+  const held = touch.steerId !== null, bx = held ? touch.x0 : PAD.x - EX * 0.7, by = held ? touch.y0 : PAD.y, R = tune.touch_pad_range;
   let kx = held ? touch.x - touch.x0 : 0, ky = held ? touch.y - touch.y0 : 0; const kd = Math.hypot(kx, ky); if (kd > R) { kx *= R / kd; ky *= R / kd; }
   ring(bx, by, R + 30, 'rgba(20,12,48,0.55)', '#fff');
   ctx.fillStyle = '#fff';
@@ -1345,8 +1354,8 @@ function touchHud() { // the thumb controls, drawn: a round directional pad on t
   if (!held) text('PUSH TO DRIVE', bx, by - R - 52, 18, '#fff');
   if (innerHeight > innerWidth) { panel(W / 2 - 330, H / 2 - 40, 660, 80, 'rgba(255,225,74,0.95)'); text('Turn your phone sideways', W / 2, H / 2, 40, PAL.ink); }
 }
-function drawPlay() { ctx.clearRect(0, 0, W, H); place(ALPHA); chaseCam(ALPHA); render(); hud(); }
-function shade(a = 0.6) { ctx.fillStyle = `rgba(20,12,48,${a})`; ctx.fillRect(0, 0, W, H); }
+function drawPlay() { ctx.clearRect(-EX, -EY, W + 2 * EX, H + 2 * EY); place(ALPHA); chaseCam(ALPHA); render(); hud(); }
+function shade(a = 0.6) { ctx.fillStyle = `rgba(20,12,48,${a})`; ctx.fillRect(-EX, -EY, W + 2 * EX, H + 2 * EY); }
 function boardLines(y) { // the scoreboard on the between-round and results screens: two columns for a big field
   const R = rigs(), two = R.length > 4, per = two ? Math.ceil(R.length / 2) : R.length;
   R.forEach((v, n) => { const cx = two ? W / 2 + (n < per ? -250 : 250) : W / 2, yy = y + (n % per) * 34, fs = two ? 19 : 22;
@@ -1504,7 +1513,11 @@ let titleT = 0;
 const CARDS = [W / 2 - 318, W / 2 - 106, W / 2 + 106, W / 2 + 318], CARD_W = 200, CARD_Y = 252, CARD_H = 172, BOTS_Y = 452;
 const moreBots = () => { CONFIG.bots.value = tune.bots >= CONFIG.bots.max ? CONFIG.bots.min : tune.bots + 1; };
 const MODE_Y = 184, MODE_X = [W / 2 - 165, W / 2 + 165], MODES = [['tag', 'PATIENT TAG'], ['br', 'BATTLE ROYALE']];
+const canFull = () => typeof document !== 'undefined' && !!document.fullscreenEnabled && !document.fullscreenElement;
+const FULL_BTN = { x: W - 110, y: 34, w: 190, h: 40 };
+function goFull() { try { const p = document.documentElement.requestFullscreen({ navigationUI: 'hide' }); if (p && p.catch) p.catch(() => {}); } catch (e) { /* this browser has no full screen */ } }
 function titleTap(x, y) { // pick a mode, a rig or the number of bots; anything else starts the match
+  if (canFull() && Math.abs(x - (FULL_BTN.x + EX * 0.7)) < FULL_BTN.w / 2 && Math.abs(y - FULL_BTN.y) < FULL_BTN.h / 2) { goFull(); return true; }
   for (let i = 0; i < 2; i++) if (Math.abs(x - MODE_X[i]) < 155 && Math.abs(y - MODE_Y) < 24) { MODE = MODES[i][0]; tone(740, 0.08, 'square', 0.15); return true; }
   for (let i = 0; i < 4; i++) if (Math.abs(x - CARDS[i]) < CARD_W / 2 && y > CARD_Y && y < CARD_Y + CARD_H) { ME = i; tone(660, 0.08, 'square', 0.15); return true; }
   if (Math.abs(x - W / 2) < 230 && Math.abs(y - BOTS_Y) < 22) { moreBots(); tone(520, 0.08, 'square', 0.15); return true; }
@@ -1517,7 +1530,7 @@ const scenes = {
   figures: { // every vehicle side by side, its name under it
     update(dt) { state.t += dt; },
     draw() {
-      ctx.clearRect(0, 0, W, H);
+      ctx.clearRect(-EX, -EY, W + 2 * EX, H + 2 * EY);
       const vs = state.vehicles, spots = [[46, 18], [38.5, 18], [30, 18], [22.5, 18], [15.5, 18]];
       const shown = [0, 1, 2, 3, NR];
       vs.forEach((v, i) => { const n = shown.indexOf(i); v.active = n >= 0; if (n >= 0) { v.x = v.px = spots[n][0]; v.z = v.pz = spots[n][1]; v.h = v.ph = 2.45; v.vx = v.vz = 0; v.y = 0; v.pitch = 0; v.immune = 0; } });
@@ -1538,10 +1551,11 @@ const scenes = {
       if (pressed('KeyB')) moreBots();
       if (pressed('Enter') || pressed('Space')) { reset(); scene = 'play'; }
       else if (pressed('KeyC')) netCreate();
+      if (pressed('KeyG') && canFull()) goFull();
       else if (pressed('KeyJ')) { net.err = ''; scene = 'join'; const el = document.getElementById('roomcode'); el.value = ''; setTimeout(() => el.focus(), 50); }
     },
     draw() {
-      ctx.clearRect(0, 0, W, H); place(1);
+      ctx.clearRect(-EX, -EY, W + 2 * EX, H + 2 * EY); place(1);
       const a = titleT * 0.25, touchy = touch.on || touch.coarse, br = MODE === 'br';   // the first picture: the bridge over the bayou, downtown ahead
       cam.fov = 58; cam.updateProjectionMatrix(); cam.position.set(Math.sin(a) * 5, 9 + Math.sin(a * 0.7), 84 + Math.sin(a * 0.5) * 10); cam.lookAt(0, 30, 205); render();
       shade(0.45); text(TITLE.toUpperCase(), W / 2 + 4, 70, 84, PAL.ink); text(TITLE.toUpperCase(), W / 2, 66, 84, PAL.it);
@@ -1557,6 +1571,7 @@ const scenes = {
       });
       panel(W / 2 - 230, BOTS_Y - 20, 460, 40); text(`RIVAL BOTS: ${tune.bots}   (${touchy ? 'tap' : 'B'} to change)`, W / 2, BOTS_Y, 19, '#ffe14a');
       panel(W / 2 - 430, 486, 860, 70); (touchy ? (br ? BR_TOUCH_CONTROLS : TOUCH_CONTROLS) : (br ? BR_CONTROLS : CONTROLS)).forEach((c, i) => text(c, W / 2, 507 + i * 28, 17, '#fff'));
+      if (canFull()) { const fb = FULL_BTN, fx = fb.x + EX * 0.7; panel(fx - fb.w / 2, fb.y - fb.h / 2, fb.w, fb.h); ctx.strokeStyle = '#fff'; ctx.lineWidth = 2; ctx.strokeRect(fx - fb.w / 2, fb.y - fb.h / 2, fb.w, fb.h); text(touchy ? 'FULL SCREEN' : 'FULL SCREEN (G)', fx, fb.y + 1, 16, '#fff'); }
       for (const k in TITLE_BTN) { const b = TITLE_BTN[k], main = k === 'solo'; panel(b.x - b.w / 2, b.y - b.h / 2, b.w, b.h, main ? 'rgba(255,225,74,0.96)' : 'rgba(20,12,48,0.92)'); ctx.strokeStyle = '#fff'; ctx.lineWidth = 3; ctx.strokeRect(b.x - b.w / 2, b.y - b.h / 2, b.w, b.h);
         text(b.label, b.x, b.y - (touchy ? 0 : 8), 24, main ? PAL.ink : '#fff'); if (!touchy) text(b.key, b.x, b.y + 17, 14, main ? PAL.ink : '#d8ccff'); }
       text(net.err || (net.status === 'connecting' ? 'Connecting to the game server...' : 'Rooms: Patient Tag for two people on two devices. Combat Racing and Campaign are not built yet.'), W / 2, 668, 16, net.err ? '#ff9ab0' : '#d8ccff');
@@ -1607,7 +1622,7 @@ scenes.join = { // type the four-character code of a friend's room
     else if (pressed('Escape')) { net.err = ''; scene = 'title'; }
   },
   draw() {
-    ctx.clearRect(0, 0, W, H); place(1); render(); shade(0.8);
+    ctx.clearRect(-EX, -EY, W + 2 * EX, H + 2 * EY); place(1); render(); shade(0.8);
     text('JOIN A ROOM', W / 2, 150, 64, PAL.it); text('Type the four-character room code from the host', W / 2, 232, 24, '#fff'); text('(or just open the invite link they sent you)', W / 2, 268, 18, '#d8ccff');
     for (const k in JOIN_BTN) { const b = JOIN_BTN[k], main = k === 'go'; panel(b.x - b.w / 2, b.y - b.h / 2, b.w, b.h, main ? 'rgba(255,225,74,0.96)' : 'rgba(20,12,48,0.92)'); ctx.strokeStyle = '#fff'; ctx.lineWidth = 3; ctx.strokeRect(b.x - b.w / 2, b.y - b.h / 2, b.w, b.h); text(main ? 'JOIN' : 'BACK', b.x, b.y, 26, main ? PAL.ink : '#fff'); }
     if (net.err) text(net.err, W / 2, 560, 22, '#ff9ab0'); else if (net.status === 'connecting') text('Connecting...', W / 2, 560, 22, '#d8ccff');
@@ -1625,7 +1640,7 @@ scenes.lobby = { // the room before a shift: who is here, what they drive, and t
     if (pressed('Escape')) netLeave();
   },
   draw() {
-    ctx.clearRect(0, 0, W, H); place(1);
+    ctx.clearRect(-EX, -EY, W + 2 * EX, H + 2 * EY); place(1);
     const a = titleT * 0.25, you = net.you, touchy = touch.on || touch.coarse;
     cam.fov = 58; cam.updateProjectionMatrix(); cam.position.set(Math.sin(a) * 5, 9, 84); cam.lookAt(0, 30, 205); render(); shade(0.72);
     text('PRIVATE ROOM: PATIENT TAG', W / 2, 36, 22, '#ff6ab0'); text(net.code, W / 2, 100, 92, PAL.it); text('Room code. Or send this link: it opens straight into this room.', W / 2, 172, 18, '#fff');
