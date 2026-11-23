@@ -25,6 +25,7 @@ After play: "Make the fire engine easy to use since it's much bigger than the ot
 After play: the owner gave a full roadmap, "Build brief for Crash Out: Houston Edition", kept word for word in `design/crash-out-roadmap.md`. It sets four modes (Patient Tag, Battle Royale, Combat Racing, Campaign), four rigs, a Houston bayou crossing, and the build order. It replaces the earlier fire-engine tuning: the engine is now the stable one with the widest turn and slowest start.
 After play: "Okay there needs to be more time more bots and they need to be way better"
 After play: "Some of the bots are just driving around in circles on the edge of the map."
+After play: "Build Battle Royale now in the existing Crash Out: Houston Edition prototype. Start from the latest four-rig Patient Tag build. Scott likes the subtle vehicle differences and considers the current handling good. Keep those tuning values. His requested gameplay change is more skilled bots." The request went on to ask for a mode picker, a three-minute free-roam battle scored on wrecks with unlimited respawns, one shared forward-firing blaster with ammo crates on the paved and dirt routes, a FIRE button under the right thumb, a protected respawn that ends on firing, bots that decide better (a crossing intercept in Tag; ammo seeking, lining up shots, breaking off and fighting each other in Battle Royale) under the same weapon rules as the player, and the four signature abilities held for the next pass.
 
 **Pitch:** Vehicle tag between rival emergency crews: whoever is stuck with the town's most insufferable patient is "IT", and the only way to get rid of him is to ram him into someone else's vehicle. *(guessed: the patient as the tag)*
 
@@ -75,6 +76,13 @@ The bots are a real fight from round one: they drive at nearly full speed, aim a
 - [x] Bots that hunt and run in earnest: they cut you off, round the block by the shortest way, lean towards you and the leader, avoid dead ends, jink off your bumper and take corners on the handbrake
 - [x] A green ring and a SAFE mark on a rig that cannot be tagged yet
 - [x] A phone HUD: large timer and patient status at the top, thumbs at the bottom
+- [x] A mode picker on the title screen: Patient Tag and Battle Royale
+- [x] Battle Royale: a three-minute free-roam match, most rival wrecks at the buzzer wins, a draw for tied leaders, unlimited respawns
+- [x] One shared weapon, a forward-firing blaster with visible bolts, and ammo crates that come back, on the streets, the bridge, the lawns and the bayou's dirt routes
+- [x] Health for every rig, one wreck credited to whoever landed the last hit, a short respawn delay and a protection window that ends if you fire
+- [x] A results screen with wrecks, losses, placement, Rematch and Change Mode
+- [x] FIRE under the right thumb on a phone, with DRIFT beside it
+- [x] Bot decisions: in Tag an IT bot predicts which bayou crossing you are taking and cuts you off at its exit when it can get there; in Battle Royale bots fetch ammo when dry, line up shots with a reaction delay and aiming error, give up a bad pursuit and fight one another
 - [x] Touch controls for a phone held sideways, beside the keyboard
 - [x] Civilian traffic that pulls over for sirens (thin stand-in) *(guessed)*
 
@@ -97,8 +105,9 @@ The bots are a real fight from round one: they drive at nearly full speed, aim a
 ## Out of scope
 - Online: session (a match with friends on their own machines): needs a server, so not built; built instead: bots in the seats, named as bots. Every vehicle takes a swappable driver (you, a bot, later a remote player).
 - Split-screen tag with a friend on one machine: change it after play
-- Battle Royale, Combat Racing and Campaign, in that order after Patient Tag (`design/crash-out-roadmap.md`): add it as a feature
-- Rig abilities and weapon pickups (Priority Run, Water Cannon, Siren Pulse, Armor Up): add it as a feature, with Battle Royale
+- Combat Racing and Campaign, in that order (`design/crash-out-roadmap.md`): add it as a feature
+- The four rig abilities (Priority Run, Water Cannon, Siren Pulse, Armor Up): add it as a feature, next pass
+- More weapons, and a lives rule for Battle Royale: add it as a feature
 - More districts: grow it
 - Vehicle upgrades and tuning: add it as a feature
 

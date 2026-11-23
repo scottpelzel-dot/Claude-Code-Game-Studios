@@ -95,6 +95,30 @@ window.CONFIG = {
   bot_player_bias: { value: 12, min: 0, max: 80, step: 2 },      // metres closer you look to an IT bot than you are: they come for you
   bot_jams_to_reset: { value: 3, min: 1, max: 8, step: 1 },      // times a bot backs out of a jam before it resets onto a road
 
+  bot_intercept_margin: { value: 0.4, min: -2, max: 4, step: 0.1 }, // seconds late an IT bot may be at a crossing's exit and still try to cut you off there
+  bot_speed_br: { value: 1.0, min: 0.4, max: 1.2, step: 0.01 },  // share of top speed a bot uses in Battle Royale
+  bot_react: { value: 0.6, min: 0.05, max: 1.5, step: 0.05 },    // seconds between a bot's looks at its target: what it aims at is that old
+  bot_aim_error: { value: 0.17, min: 0, max: 0.3, step: 0.01 },  // radians a bot's aim may be off, either side, re-rolled at each look
+  bot_fire_range: { value: 55, min: 15, max: 110, step: 5 },     // metres inside which a bot will shoot
+  bot_break_off: { value: 10, min: 2, max: 30, step: 1 },         // seconds a bot hunts one rig without hurting it before it gives up
+
+  // ---- Battle Royale ------------------------------------------------------------------------
+  br_time: { value: 180, min: 30, max: 600, step: 10 },          // seconds a match lasts
+  br_hp: { value: 100, min: 20, max: 300, step: 5 },             // health of every rig
+  br_damage: { value: 20, min: 5, max: 100, step: 1 },           // health a blaster bolt takes
+  br_ammo_start: { value: 6, min: 0, max: 30, step: 1 },         // bolts you start and respawn with
+  br_ammo_max: { value: 12, min: 1, max: 60, step: 1 },          // bolts a rig can carry
+  br_pickup_ammo: { value: 6, min: 1, max: 30, step: 1 },        // bolts in a crate
+  br_pickup_respawn: { value: 9, min: 1, max: 60, step: 1 },     // seconds before a crate comes back
+  br_fire_cooldown: { value: 0.35, min: 0.05, max: 2, step: 0.05 }, // seconds between bolts, for bots and you alike
+  br_shot_speed: { value: 75, min: 30, max: 150, step: 5 },      // m/s
+  br_shot_life: { value: 1.3, min: 0.3, max: 4, step: 0.1 },     // seconds a bolt flies
+  br_shot_radius: { value: 0.9, min: 0.2, max: 3, step: 0.1 },   // metres of forgiveness round a bolt
+  br_ram_min: { value: 10, min: 2, max: 30, step: 1 },           // m/s closing speed below which a ram does no damage
+  br_ram_damage: { value: 1.0, min: 0, max: 6, step: 0.1 },      // health per m/s above that, shared out by weight
+  br_respawn_delay: { value: 2.5, min: 0.5, max: 10, step: 0.5 }, // seconds wrecked before you are back
+  br_protect: { value: 3, min: 0, max: 10, step: 0.5 },          // seconds a fresh respawn cannot be hurt; firing ends it
+
   // ---- Civilian traffic (thin stand-in) ----------------------------------------------------
   civ_count: { value: 6, min: 0, max: 12, step: 1 },
   civ_speed: { value: 9, min: 3, max: 18, step: 0.5 },           // m/s cruising

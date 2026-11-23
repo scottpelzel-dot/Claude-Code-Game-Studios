@@ -29,6 +29,8 @@ const FONT = '"Arial Black", "Arial Bold", Impact, sans-serif';
 const TITLE = 'Crash Out', EDITION = 'Houston Edition';
 const CONTROLS = ['W / Up: accelerate    S / Down: brake, reverse    A D / Left Right: steer', 'Space: handbrake drift    R: back on the road    P: pause    M: mute'];
 const TOUCH_CONTROLS = ['Hold the phone sideways. Left thumb pad: push forward to go,', 'back to brake and reverse, sideways to steer. Right thumb: DRIFT.'];
+const BR_CONTROLS = ['W / Up: accelerate    S / Down: brake, reverse    A D / Left Right: steer', 'F or K: fire    Space: handbrake drift    R: back on the road    P: pause    M: mute'];
+const BR_TOUCH_CONTROLS = ['Hold the phone sideways. Left thumb pad drives.', 'Right thumb: FIRE, with DRIFT beside it.'];
 const clock = window.GAME_CLOCK || { now: () => performance.now() / 1000 }; // a check may inject one
 const CHEAP = params.get('render') === 'cheap'; // a headless shot or check: 3D draws cheap; players never see it
 let seed;
@@ -81,6 +83,7 @@ addEventListener('keyup', e => down.delete(e.code));
 addEventListener('pointerdown', e => { // a click or a tap works wherever Enter does; on the title it can pick a rig first
   startAudio();
   if (scene === 'title' && titleTap(...toLogical(e))) return;
+  if (scene === 'brResults') { resultTap(...toLogical(e)); return; }
   if (scene === 'title' || scene === 'between' || scene === 'over' || scene === 'results' || scene === 'pause') hit.add('Enter');
 });
 addEventListener('blur', () => down.clear());
@@ -89,17 +92,22 @@ addEventListener('blur', () => down.clear());
 // brake and reverse, sideways to steer), with buttons to drift, reset and pause. Turned on by the first touch.
 const touch = { on: false, coarse: !!(window.matchMedia && matchMedia('(pointer: coarse)').matches), steerId: null, x0: 0, y0: 0, x: 0, y: 0, held: new Map() };
 const PAD = { x: 170, y: H - 150 };   // where the pad rests; it moves under the thumb when touched
-const BTN = {
+const BTN_TAG = {
   drift: { x: W - 130, y: H - 140, r: 76, label: 'DRIFT' },
   pause: { x: W - 150, y: 232, r: 34, label: 'PAUSE' }, reset: { x: W - 66, y: 232, r: 34, label: 'RESET' },
 };
+const BTN_BR = { // FIRE sits under the right thumb, DRIFT beside it
+  fire: { x: W - 124, y: H - 140, r: 80, label: 'FIRE' }, drift: { x: W - 300, y: H - 84, r: 56, label: 'DRIFT' },
+  pause: BTN_TAG.pause, reset: BTN_TAG.reset,
+};
+const btns = () => MODE === 'br' ? BTN_BR : BTN_TAG;
 const touchHeld = k => { for (const v of touch.held.values()) if (v === k) return true; return false; };
 function toLogical(e) { const r = canvas.getBoundingClientRect(); return [(e.clientX - r.left) / r.width * W, (e.clientY - r.top) / r.height * H]; }
 addEventListener('pointerdown', e => {
   if (e.pointerType !== 'touch') return;
   touch.on = true; if (scene !== 'play') return;
   const [x, y] = toLogical(e);
-  for (const k in BTN) { const b = BTN[k]; if (Math.hypot(x - b.x, y - b.y) < b.r * 1.25) { touch.held.set(e.pointerId, k); if (k === 'reset') hit.add('KeyR'); if (k === 'pause') hit.add('KeyP'); return; } }
+  for (const k in btns()) { const b = btns()[k]; if (Math.hypot(x - b.x, y - b.y) < b.r * 1.25) { touch.held.set(e.pointerId, k); if (k === 'reset') hit.add('KeyR'); if (k === 'pause') hit.add('KeyP'); return; } }
   if (x < W * 0.5 && touch.steerId === null) { touch.steerId = e.pointerId; touch.x0 = touch.x = x; touch.y0 = touch.y = clamp(y, 260, H - 110); }
 });
 addEventListener('pointermove', e => { if (e.pointerId === touch.steerId) [touch.x, touch.y] = toLogical(e); });
@@ -163,7 +171,7 @@ function soundStep() {
     snd.eg.gain.setTargetAtTime(playing ? 0.07 + 0.06 * Math.abs(p.inp.throttle) : 0, t, 0.08);
     const it = state.vehicles[state.it];
     let vol = 0, f = 700;
-    if (playing) {
+    if (playing && it) {
       if (state.it === ME) { f = (state.t * 2.2) % 1 < 0.5 ? 660 : 880; vol = 0.035; }       // your own two-tone
       else { f = 760 + 260 * Math.sin(state.t * 5.2); vol = 0.16 * Math.max(0, 1 - Math.hypot(it.x - p.x, it.z - p.z) / 130); } // IT's wail gets louder as it closes
     }
@@ -431,6 +439,25 @@ for (let i = 0; i < MAX_CIV; i++) meshes.push(buildVehicle('civ', CIV_TINTS[i % 
 // a green ring under a rig that cannot be tagged yet: no tag-backs, made visible
 const safeRings = meshes.slice(0, NR).map(() => { const m = new THREE.Mesh(new THREE.RingGeometry(3.6, 4.4, 28), new THREE.MeshBasicMaterial({ color: 0x7dff5a, transparent: true, side: THREE.DoubleSide, depthWrite: false })); m.rotation.x = -Math.PI / 2; m.visible = false; scene3.add(m); return m; });
 
+// Battle Royale: ammo crates on the paved streets and along the dirt routes, and a pool of blaster bolts.
+const PICKUPS = [];
+{
+  const clear = (x, z) => !walls.some(w => x > w.x0 - 3 && x < w.x1 + 3 && z > w.z0 - 3 && z < w.z1 + 3) && !posts.some(p => Math.hypot(p.x - x, p.z - z) < p.r + 2.5);
+  for (const [x, z] of [[0, 0], [-60, 60], [60, -60], [-60, -60], [0, -120], [-120, 0], [120, 0], [-60, 180], [120, 180]]) PICKUPS.push({ x, z, layer: null, route: 'paved' });
+  PICKUPS.push({ x: 0, z: (CH.z0 + CH.z1) / 2, layer: 'deck', route: 'paved' });                                        // the middle of the bridge
+  for (const [x, z] of [[CH.fordX, 150], [-45, 142.5], [-95, 157.5], [105, 142.5]]) PICKUPS.push({ x, z, layer: 'low', route: 'dirt' });   // the low-water crossing and the bank trails
+  let lawns = 0;
+  for (const bx of BCEN) for (const bz of BCEN) { if (lawns >= 4 || (bx === PLAZA.x && bz === PLAZA.z) || (bx + bz) % 120 !== 0) continue; if (clear(bx, bz + 18.5)) { PICKUPS.push({ x: bx, z: bz + 18.5, layer: null, route: 'dirt' }); lawns++; } }
+}
+const crateMeshes = PICKUPS.map(p => {
+  const g = new THREE.Group(), y = (p.layer === 'low' ? bankY(p.z) : 0) + 1.5;
+  const body = new THREE.Mesh(unitBox, new THREE.MeshBasicMaterial({ color: 0xffe14a })); body.scale.set(1.7, 1.7, 1.7); g.add(body);
+  for (const r of [0, Math.PI / 2]) { const band = new THREE.Mesh(unitBox, new THREE.MeshBasicMaterial({ color: 0x1a1a6e })); band.scale.set(1.78, 0.4, 1.78); band.rotation.z = r; g.add(band); }
+  const ring = new THREE.Mesh(new THREE.RingGeometry(2.1, 2.6, 20), new THREE.MeshBasicMaterial({ color: 0xffe14a, transparent: true, opacity: 0.6, side: THREE.DoubleSide, depthWrite: false })); ring.rotation.x = -Math.PI / 2; ring.position.y = -1.25; g.add(ring);
+  g.position.set(p.x, y, p.z); g.visible = false; g.userData.y = y; scene3.add(g); return g;
+});
+const boltMeshes = Array.from({ length: 64 }, () => { const m = new THREE.Mesh(unitBox, new THREE.MeshBasicMaterial({ color: 0x7df0ff })); m.scale.set(0.42, 0.42, 3.2); m.visible = false; scene3.add(m); return m; });
+
 // The patient nobody wants: a scowling head, a shaking fist and a hospital gown flapping behind.
 const patient = new THREE.Group(); scene3.add(patient);
 let fist, gown;
@@ -460,7 +487,7 @@ const marker = (() => {
 })();
 // puffs: tyre smoke, splashes and crash sparks
 const puffs = [];
-for (let i = 0; i < 48; i++) { const m = new THREE.Mesh(unitBox, new THREE.MeshBasicMaterial({ color: 0xffc9a0, transparent: true, opacity: 0, depthWrite: false })); m.visible = false; scene3.add(m); puffs.push({ m, life: 0 }); }
+for (let i = 0; i < 96; i++) { const m = new THREE.Mesh(unitBox, new THREE.MeshBasicMaterial({ color: 0xffc9a0, transparent: true, opacity: 0, depthWrite: false })); m.visible = false; scene3.add(m); puffs.push({ m, life: 0 }); }
 let puffI = 0;
 function puff(x, y, z, vx, vy, vz, size, life, color) {
   const p = puffs[puffI = (puffI + 1) % puffs.length];
@@ -470,6 +497,7 @@ function puff(x, y, z, vx, vy, vz, size, life, color) {
 // =========================================================================================
 // THE GAME
 // =========================================================================================
+let MODE = 'tag';           // 'tag' (Patient Tag) or 'br' (Battle Royale): one town, one set of rigs, two sets of rules
 let scene, state, ME = 0;   // ME: which rig you drive (0 ambulance, 1 fire engine, 2 cruiser, 3 Humvee); bots drive the rest
 const nearestNode = (x, z) => [clamp(Math.round(x / PITCH) + 2, 0, 4), clamp(Math.round(z / PITCH) + 2, 0, 5)];
 const nodePos = n => [NODES[n[0]], NODES_Z[n[1]]];
@@ -514,7 +542,7 @@ function humanDriver() {
   const d = {
     throttle: (down.has('KeyW') || down.has('ArrowUp') ? 1 : 0) - (down.has('KeyS') || down.has('ArrowDown') ? 1 : 0),
     steer: (down.has('KeyD') || down.has('ArrowRight') ? 1 : 0) - (down.has('KeyA') || down.has('ArrowLeft') ? 1 : 0),
-    hand: down.has('Space'),
+    hand: down.has('Space'), fire: down.has('KeyF') || down.has('KeyK'),
   };
   if (touch.on) { // the thumb pad: forward and back are the throttle, sideways is the wheel
     if (touch.steerId !== null) {
@@ -522,7 +550,7 @@ function humanDriver() {
       const live = v => Math.abs(v) < dz ? 0 : Math.sign(v) * (Math.abs(v) - dz) / (1 - dz);
       d.steer = live(ax); d.throttle = live(ay);
     }
-    d.hand = d.hand || touchHeld('drift');
+    d.hand = d.hand || touchHeld('drift'); d.fire = d.fire || touchHeld('fire');
   }
   return d;
 }
@@ -537,20 +565,31 @@ function pathTo(from, to) { // the junctions on the shortest way there, first to
   const path = [from]; let n = from; while (prev.get(key(n))) { n = prev.get(key(n)); path.push(n); }
   return path;
 }
-function botDriver(v) {
+function navTo(v, x, z, layer) { // how to drive to a spot: straight if nothing is in the way, else round the block by the shortest way
+  const lined = !v.layer && Math.abs(v.x) < CH.bridgeW - 2;             // at one end of the bridge, pointing along it
+  if (layer === 'deck' && v.layer !== 'deck' && !lined) return { tx: 0, tz: v.z < (CH.z0 + CH.z1) / 2 ? CH.z0 - 8 : CH.z1 + 8, aimNode: null, bridge: true };   // it is up on the bridge: go to the nearer end, not underneath
+  if (v.layer === 'deck' && layer === 'low') return { tx: 0, tz: Math.cos(v.h) > 0 ? CH.z1 + 8 : CH.z0 - 8, aimNode: null, bridge: true };                       // it is down on the bank: off the bridge first
+  if (sightClear(v.x, v.z, x, z)) return { tx: x, tz: z, aimNode: null };
+  const path = pathTo(nearestNode(v.x, v.z), nearestNode(x, z)); let k = 0;
+  for (let i = path.length - 1; i > 0; i--) { const [nx, nz] = nodePos(path[i]); if (sightClear(v.x, v.z, nx, nz)) { k = i; break; } }
+  if (k === 0 && path.length > 1) { const [hx, hz] = nodePos(path[0]); if (Math.hypot(hx - v.x, hz - v.z) < 15) k = 1; }   // at the junction already: on to the next, never round and round this one
+  const [tx, tz] = nodePos(path[k]); return { tx, tz, aimNode: path[k] };
+}
+function crossingOf(o) { // is this rig committing to a way over the bayou? which one, and which way?
+  if (o.layer === 'deck') return { x: 0, north: Math.cos(o.h) > 0 };
+  if (o.layer === 'low' && Math.abs(o.x - CH.fordX) < 22) return { x: CH.fordX, north: Math.cos(o.h) > 0 };
+  const sp = Math.hypot(o.vx, o.vz); if (sp < 8 || Math.abs(o.vz) < Math.abs(o.vx) * 1.3) return null;   // crawling, or not pointed across
+  const north = o.vz > 0;
+  if (north ? (o.z < 62 || o.z > CH.z0) : (o.z > 196 || o.z < CH.z1)) return null;                    // not on the approach
+  for (const cx of [0, CH.fordX]) if (Math.abs(o.x - cx) < 9) return { x: cx, north };
+  return null;
+}
+
+// ---- Patient Tag: hunt when IT, run when not ------------------------------------------------
+function tagBrain(v) {
   const r = Math.min(state.round, 3), speedShare = tune['bot_speed_r' + r], turnShare = tune['bot_turn_r' + r], lead = tune['bot_lead_r' + r];
-  const b = v.bot, vf = v.vx * Math.sin(v.h) + v.vz * Math.cos(v.h), sp = Math.hypot(v.vx, v.vz);
-  // stuck against something: back out with the wheel turned; jammed again and again, reset onto a road
-  if (b.reverse > 0) { b.reverse -= STEP; b.escape = 1.2; return { throttle: -1, steer: b.reverseSteer, hand: false }; }
-  b.slow = sp < 1.5 && v.stall <= 0 ? b.slow + STEP : 0; b.jamT -= STEP; if (b.jamT <= 0) b.jams = 0;
-  if (b.slow > 0.9) {
-    b.slow = 0; b.reverse = 0.8; b.reverseSteer = rng() < 0.5 ? 1 : -1; b.jams++; b.jamT = 9; b.node = null; events.push({ t: state.t, jam: [v.i, Math.round(v.x), Math.round(v.z), v.layer || '-'] });
-    if (b.jams >= tune.bot_jams_to_reset) { b.jams = 0; b.reverse = 0; resetOnRoad(v); events.push({ t: state.t, botReset: v.i }); }
-  }
-  let tx, tz, aimNode = null, ramming = false;
-  const it = state.vehicles[state.it];
-  if (b.escape > 0) { b.escape -= STEP; aimNode = nearestNode(v.x, v.z); [tx, tz] = nodePos(aimNode); }   // just backed out of a jam: make for the nearest junction before trying again
-  else if (v === it) {
+  const b = v.bot, sp = Math.hypot(v.vx, v.vz), it = state.vehicles[state.it];
+  if (v === it) {
     // HUNT. Pick the rival it can reach soonest: near ones first, never one still in its grace, a lean
     // towards whoever is winning and towards you. Then cut them off rather than follow them.
     let best = null, bestD = 1e9; const leader = rigs().reduce((a, c) => c.clean > a.clean ? c : a);
@@ -562,84 +601,174 @@ function botDriver(v) {
       if (o === b.prey) d -= 12;                                          // stay on a target rather than dithering between two
       if (d < bestD) { bestD = d; best = o; }
     }
+    if (b.prey !== best) b.way = null;
     b.prey = best;
     const dist = Math.hypot(best.x - v.x, best.z - v.z), ahead = lead * Math.min(dist / Math.max(sp, 12), 1.6);
-    const px = best.x + best.vx * ahead, pz = best.z + best.vz * ahead;
-    ramming = dist < 18;                                                   // close enough: no braking, just hit them
-    const lined = !v.layer && Math.abs(v.x) < CH.bridgeW - 2;              // at one end of the bridge, pointing along it
-    if (best.layer === 'deck' && v.layer !== 'deck' && !lined) { tx = 0; tz = v.z < (CH.z0 + CH.z1) / 2 ? CH.z0 - 8 : CH.z1 + 8; ramming = false; }   // they are up on the bridge: get to its nearer end, not underneath it
-    else if (v.layer === 'deck' && best.layer === 'low') { tx = 0; tz = Math.cos(v.h) > 0 ? CH.z1 + 8 : CH.z0 - 8; ramming = false; }                 // they are down on the bank: off the bridge first
-    else if (sightClear(v.x, v.z, px, pz)) { tx = px; tz = pz; }
-    else if (sightClear(v.x, v.z, best.x, best.z)) { tx = best.x; tz = best.z; }
-    else { // round the block: follow the shortest way, steering for the furthest junction on it that is in plain sight
-      const path = pathTo(nearestNode(v.x, v.z), nearestNode(px, pz)); let k = 0;
-      for (let i = path.length - 1; i > 0; i--) { const [nx, nz] = nodePos(path[i]); if (sightClear(v.x, v.z, nx, nz)) { k = i; break; } }
-      if (k === 0 && path.length > 1) { const [hx, hz] = nodePos(path[0]); if (Math.hypot(hx - v.x, hz - v.z) < 15) k = 1; }   // at the junction already: on to the next, never round and round this one
-      aimNode = path[k]; [tx, tz] = nodePos(aimNode);
-    }
-  } else {
-    // RUN. Head for the junction that is most streets away from IT and still has ways out beyond it:
-    // never towards IT, never into a corner, and no U-turns with IT on your bumper.
-    const np = b.node && nodePos(b.node), dIt = Math.hypot(it.x - v.x, it.z - v.z) || 1;
-    b.think -= STEP;
-    const reach = Math.max(14, sp * 0.7);                                 // the faster it goes, the sooner it must plan the next turn
-    if (!b.node || Math.hypot(np[0] - v.x, np[1] - v.z) < reach || b.think <= 0) {
-      const here = nearestNode(v.x, v.z), hp = nodePos(here), fx = Math.sin(v.h), fz = Math.cos(v.h), ix = (it.x - v.x) / dIt, iz = (it.z - v.z) / dIt;
-      const hops = hopsFrom(nearestNode(it.x + it.vx * 0.8, it.z + it.vz * 0.8)), atHere = Math.hypot(hp[0] - v.x, hp[1] - v.z) < reach;
-      b.safe = dIt > 100 && hops(here) >= 4;                              // IT is a long way off: cruise round the blocks, do not bolt for a far corner
-      let best = here, bestS = -1e9;
-      for (const n of atHere ? neighbours(here) : neighbours(here).concat([here])) {
-        const [nx, nz] = nodePos(n), dx = nx - v.x, dz = nz - v.z, d = Math.hypot(dx, dz) || 1, outs = neighbours(n);
-        let onward = 0; for (const m of outs) onward = Math.max(onward, hops(m));
-        let s = Math.min(hops(n), 5) * 45 + Math.min(onward, 6) * 20 + Math.min(Math.hypot(nx - it.x, nz - it.z), 150) * 0.6;   // far enough is far enough
-        const fwd = (dx * fx + dz * fz) / d;
-        if (fwd < -0.3) s -= 35 + (dIt < 45 ? 60 : 0) + (b.safe ? 110 : 0); else if (fwd > 0.5) s += b.safe ? 45 : 14;   // keep your speed; with IT far away, just keep rolling
-        if ((dx * ix + dz * iz) / d > 0.55 && dIt < 95) s -= 140;
-        s -= outs.length === 1 ? 110 : outs.length === 2 ? 45 : 0;       // dead ends and the corners of the map are traps
-        if (n[1] === 5) s -= 25;                                         // so is the far bank: two ways off it
-        if (n[1] !== here[1] && Math.max(n[1], here[1]) === 5 && n[0] === 3) s += (tune[KINDS[v.kind].stat + '_dirt'] - 0.8) * 70;   // the dirt crossing suits some rigs and not others
-        if (rigs().some(o => o !== v && o !== it && Math.hypot(o.x - nx, o.z - nz) < 20)) s += 10;   // company: IT may take them instead
-        s += rng() * 34 * (1.02 - turnShare);
-        if (s > bestS) { bestS = s; best = n; }
+    // INTERCEPT. If the prey is committing to the bridge or the dirt crossing, work out where it comes
+    // off the far side and whether this rig can be waiting there: straight to the exit if it is already
+    // on that bank, or over the other crossing if that is quick enough.
+    const cr = !b.way && dist > 26 ? crossingOf(best) : null;
+    if (cr) {
+      const exitZ = cr.north ? CH.z1 + 10 : CH.z0 - 10, top = stat(v, 'top') * tune.it_speed_bonus * speedShare, stem = KINDS[v.kind].stat;
+      const preyEta = Math.abs(best.z - exitZ) / Math.max(Math.hypot(best.vx, best.vz), 14);
+      const onFarBank = cr.north ? v.z > CH.z1 - 2 : v.z < CH.z0 + 2, inSameCrossing = !!v.layer && Math.abs(v.x - cr.x) < 24;
+      let eta = Infinity, way = null, how = '';
+      if (onFarBank) { eta = Math.hypot(cr.x - v.x, exitZ - v.z) / top; way = [[cr.x, exitZ]]; how = 'waits at the exit'; }
+      else if (!inSameCrossing) {
+        const ox = cr.x === 0 ? CH.fordX : 0, inZ = cr.north ? CH.z0 - 6 : CH.z1 + 6, outZ = cr.north ? CH.z1 + 6 : CH.z0 - 6, share = ox === 0 ? 1 : tune[stem + '_dirt'];
+        eta = (Math.hypot(ox - v.x, inZ - v.z) + (CH.z1 - CH.z0 + 12) / share + Math.abs(ox - cr.x)) / top; way = [[ox, inZ], [ox, outZ], [cr.x, exitZ]]; how = 'takes the other crossing';
       }
-      b.node = best; b.think = b.safe ? 1.2 : 0.5;
+      if (eta < preyEta + tune.bot_intercept_margin) { b.way = way; b.wayT = Math.max(4, eta + 2.5); b.wayPrey = best; events.push({ t: state.t, intercept: [v.i, best.i, cr.x === 0 ? 'bridge' : 'dirt crossing', how, +eta.toFixed(1), +preyEta.toFixed(1)] }); }
     }
-    [tx, tz] = nodePos(b.node); aimNode = b.node;
-    // IT on the bumper: jink away at the last moment
-    b.dodgeCool -= STEP;
-    const closing = ((it.vx - v.vx) * (v.x - it.x) + (it.vz - v.vz) * (v.z - it.z)) / dIt;
-    if (b.dodge <= 0 && b.dodgeCool <= 0 && dIt < tune.bot_dodge_range && closing > 2 && sp > 8 && v.layer !== 'deck') {
-      b.dodge = tune.bot_dodge_time; b.dodgeCool = tune.bot_dodge_cooldown * (r === 1 ? 1.8 : 1);
-      b.dodgeSteer = ((it.x - v.x) * Math.cos(v.h) - (it.z - v.z) * Math.sin(v.h)) > 0 ? -1 : 1;
+    if (b.way) {
+      b.wayT -= STEP;
+      if (b.wayT <= 0 || dist < 22 || !best.active || (sightClear(v.x, v.z, best.x, best.z) && dist < 45)) b.way = null;   // close enough to simply hit them, or the chance has gone
+      else {
+        const [wx, wz] = b.way[0];
+        if (Math.hypot(wx - v.x, wz - v.z) < 10) { b.way.shift(); if (!b.way.length) b.way = null; }
+        if (b.way) return navTo(v, b.way[0][0], b.way[0][1], null);
+      }
     }
-    if (b.dodge > 0) { b.dodge -= STEP; return { throttle: 1, steer: b.dodgeSteer, hand: b.dodge > tune.bot_dodge_time * 0.5 }; }
+    const px = best.x + best.vx * ahead, pz = best.z + best.vz * ahead;
+    let nav = navTo(v, px, pz, best.layer);
+    if (nav.aimNode && sightClear(v.x, v.z, best.x, best.z)) nav = { tx: best.x, tz: best.z, aimNode: null };
+    nav.ramming = dist < 18 && !nav.bridge;                               // close enough: no braking, just hit them
+    return nav;
   }
+  // RUN. Head for the junction that is most streets away from IT and still has ways out beyond it:
+  // never towards IT, never into a corner, and no U-turns with IT on your bumper.
+  const np = b.node && nodePos(b.node), dIt = Math.hypot(it.x - v.x, it.z - v.z) || 1;
+  b.think -= STEP;
+  const reach = Math.max(14, sp * 0.7);                                   // the faster it goes, the sooner it must plan the next turn
+  if (!b.node || Math.hypot(np[0] - v.x, np[1] - v.z) < reach || b.think <= 0) {
+    const here = nearestNode(v.x, v.z), hp = nodePos(here), fx = Math.sin(v.h), fz = Math.cos(v.h), ix = (it.x - v.x) / dIt, iz = (it.z - v.z) / dIt;
+    const hops = hopsFrom(nearestNode(it.x + it.vx * 0.8, it.z + it.vz * 0.8)), atHere = Math.hypot(hp[0] - v.x, hp[1] - v.z) < reach;
+    b.safe = dIt > 100 && hops(here) >= 4;                                // IT is a long way off: cruise round the blocks, do not bolt for a far corner
+    let best = here, bestS = -1e9;
+    for (const n of atHere ? neighbours(here) : neighbours(here).concat([here])) {
+      const [nx, nz] = nodePos(n), dx = nx - v.x, dz = nz - v.z, d = Math.hypot(dx, dz) || 1, outs = neighbours(n);
+      let onward = 0; for (const m of outs) onward = Math.max(onward, hops(m));
+      let s = Math.min(hops(n), 5) * 45 + Math.min(onward, 6) * 20 + Math.min(Math.hypot(nx - it.x, nz - it.z), 150) * 0.6;   // far enough is far enough
+      const fwd = (dx * fx + dz * fz) / d;
+      if (fwd < -0.3) s -= 35 + (dIt < 45 ? 60 : 0) + (b.safe ? 110 : 0); else if (fwd > 0.5) s += b.safe ? 45 : 14;   // keep your speed; with IT far away, just keep rolling
+      if ((dx * ix + dz * iz) / d > 0.55 && dIt < 95) s -= 140;
+      s -= outs.length === 1 ? 110 : outs.length === 2 ? 45 : 0;         // dead ends and the corners of the map are traps
+      if (n[1] === 5) s -= 25;                                           // so is the far bank: two ways off it
+      if (n[1] !== here[1] && Math.max(n[1], here[1]) === 5 && n[0] === 3) s += (tune[KINDS[v.kind].stat + '_dirt'] - 0.8) * 70;   // the dirt crossing suits some rigs and not others
+      if (rigs().some(o => o !== v && o !== it && Math.hypot(o.x - nx, o.z - nz) < 20)) s += 10;   // company: IT may take them instead
+      s += rng() * 34 * (1.02 - turnShare);
+      if (s > bestS) { bestS = s; best = n; }
+    }
+    b.node = best; b.think = b.safe ? 1.2 : 0.5;
+  }
+  // IT on the bumper: jink away at the last moment
+  b.dodgeCool -= STEP;
+  const closing = ((it.vx - v.vx) * (v.x - it.x) + (it.vz - v.vz) * (v.z - it.z)) / dIt;
+  if (b.dodge <= 0 && b.dodgeCool <= 0 && dIt < tune.bot_dodge_range && closing > 2 && sp > 8 && v.layer !== 'deck') {
+    b.dodge = tune.bot_dodge_time; b.dodgeCool = tune.bot_dodge_cooldown * (r === 1 ? 1.8 : 1);
+    b.dodgeSteer = ((it.x - v.x) * Math.cos(v.h) - (it.z - v.z) * Math.sin(v.h)) > 0 ? -1 : 1;
+  }
+  if (b.dodge > 0) { b.dodge -= STEP; return { direct: { throttle: 1, steer: b.dodgeSteer, hand: b.dodge > tune.bot_dodge_time * 0.5, fire: false } }; }
+  const [tx, tz] = nodePos(b.node);
+  return { tx, tz, aimNode: b.node, cruise: b.safe ? tune.bot_cruise : 1 };
+}
+
+// ---- Battle Royale: get ammo when dry, pick a fight it can win, line the shot up, know when to quit
+function nearestCrate(v) {
+  let best = null, bestD = 1e9;
+  for (const p of state.pickups) { if (p.wait > 0) continue; const d = Math.hypot(p.x - v.x, p.z - v.z) + (p.layer && p.layer !== v.layer ? 25 : 0); if (d < bestD) { bestD = d; best = p; } }
+  return best && { p: best, d: bestD };
+}
+function battleBrain(v) {
+  const b = v.bot; b.react -= STEP; if (b.shunT > 0) b.shunT -= STEP;
+  // It decides, and looks, only every so often: that pause is its reaction time, and what it then
+  // believes about its target is that old, with a little aiming error on top.
+  if (b.react <= 0) {
+    b.react = tune.bot_react * (0.7 + rng() * 0.6);
+    const foes = rigs().filter(o => o !== v), crate = nearestCrate(v);
+    if (b.prey) {
+      const d = Math.hypot(b.prey.x - v.x, b.prey.z - v.z);
+      const why = !b.prey.active ? 'gone' : b.chaseT > tune.bot_break_off ? 'too long without a hit' : d > 170 ? 'too far' : (v.hp <= 30 && b.prey.hp > v.hp + 30) ? 'outmatched' : '';
+      if (why) { if (why !== 'gone') { b.shun = b.prey; b.shunT = 7; events.push({ t: state.t, breakOff: [v.i, b.prey.i, why] }); } b.prey = null; b.chaseT = 0; b.seen = null; }
+    }
+    const dry = v.ammo === 0, low = v.ammo <= 2 && crate && crate.d < 45, hurtAndShort = v.hp <= 30 && v.ammo < tune.br_ammo_max / 2;
+    if (crate && (dry || low || (hurtAndShort && !b.prey))) { if (b.goal !== 'ammo' && dry) events.push({ t: state.t, seekAmmo: [v.i] }); b.goal = 'ammo'; b.crate = crate.p; b.prey = null; b.seen = null; }
+    else if (v.ammo > 0 && foes.length) {
+      let best = null, bestS = 1e9;
+      for (const o of foes) {
+        let sc = Math.hypot(o.x - v.x, o.z - v.z) + (o.shield > 0 ? 90 : 0) - (tune.br_hp - o.hp) * 0.35 - (o === b.prey ? 18 : 0) + (o === b.shun && b.shunT > 0 ? 220 : 0);
+        if (sc < bestS) { bestS = sc; best = o; }
+      }
+      if (best !== b.prey) b.chaseT = 0;
+      b.goal = 'fight'; b.prey = best;
+      b.seen = { x: best.x, z: best.z, vx: best.vx, vz: best.vz, err: (rng() - 0.5) * 2 * tune.bot_aim_error };
+    } else b.goal = 'roam';
+  }
+  if (b.goal === 'ammo' && b.crate && b.crate.wait <= 0) return navTo(v, b.crate.x, b.crate.z, b.crate.layer);
+  if (b.goal === 'fight' && b.prey && b.prey.active && b.seen) {
+    b.chaseT += STEP;
+    const p = b.prey, sn = b.seen, d = Math.hypot(p.x - v.x, p.z - v.z), flight = d / tune.br_shot_speed;
+    const ax = sn.x + sn.vx * flight, az = sn.z + sn.vz * flight;       // where the bolt should meet it, by the bot's last look
+    const sameLevel = !(p.layer && v.layer && p.layer !== v.layer) && !(p.layer === 'deck' && !v.layer && Math.abs(v.x) > CH.bridgeW);
+    if (sameLevel && d < tune.bot_fire_range * 1.4 && sightClear(v.x, v.z, p.x, p.z)) {
+      // line the shot up: turn the nose onto that spot, then fire when it is on, at a rig that can be hurt
+      const off = Math.abs(wrapA(Math.atan2(ax - v.x, az - v.z) + sn.err - v.h));
+      return { tx: ax, tz: az, aimNode: null, aimErr: sn.err, ramming: d < 14, cruise: d < 26 ? 0.55 : 1, fire: d < tune.bot_fire_range && off < 0.07 + 1.6 / Math.max(d, 6) && p.shield <= 0 };
+    }
+    return navTo(v, p.x + p.vx * 0.6, p.z + p.vz * 0.6, p.layer);
+  }
+  // nothing to do: roll on round the blocks
+  const np = b.node && nodePos(b.node);
+  if (!b.node || Math.hypot(np[0] - v.x, np[1] - v.z) < 15) {
+    const here = nearestNode(v.x, v.z), fx = Math.sin(v.h), fz = Math.cos(v.h); let best = here, bestS = -1e9;
+    for (const n of neighbours(here)) { const [nx, nz] = nodePos(n), d = Math.hypot(nx - v.x, nz - v.z) || 1, sc = ((nx - v.x) * fx + (nz - v.z) * fz) / d * 30 + neighbours(n).length * 8 + rng() * 25; if (sc > bestS) { bestS = sc; best = n; } }
+    b.node = best;
+  }
+  const [tx, tz] = nodePos(b.node);
+  return { tx, tz, aimNode: b.node, cruise: 0.75 };
+}
+
+function botDriver(v) {
+  const br = MODE === 'br', r = Math.min(state.round, 3), speedShare = br ? tune.bot_speed_br : tune['bot_speed_r' + r], turnShare = br ? 1 : tune['bot_turn_r' + r];
+  const b = v.bot, vf = v.vx * Math.sin(v.h) + v.vz * Math.cos(v.h), sp = Math.hypot(v.vx, v.vz);
+  // stuck against something: back out with the wheel turned; jammed again and again, reset onto a road
+  if (b.reverse > 0) { b.reverse -= STEP; b.escape = 1.2; return { throttle: -1, steer: b.reverseSteer, hand: false, fire: false }; }
+  b.slow = sp < 1.5 && v.stall <= 0 ? b.slow + STEP : 0; b.jamT -= STEP; if (b.jamT <= 0) b.jams = 0;
+  if (b.slow > 0.9) {
+    b.slow = 0; b.reverse = 0.8; b.reverseSteer = rng() < 0.5 ? 1 : -1; b.jams++; b.jamT = 9; b.node = null; b.way = null; events.push({ t: state.t, jam: [v.i, Math.round(v.x), Math.round(v.z), v.layer || '-'] });
+    if (b.jams >= tune.bot_jams_to_reset) { b.jams = 0; b.reverse = 0; resetOnRoad(v); events.push({ t: state.t, botReset: v.i }); }
+  }
+  let nav;
+  if (b.escape > 0) { b.escape -= STEP; const n = nearestNode(v.x, v.z), [x, z] = nodePos(n); nav = { tx: x, tz: z, aimNode: n }; }   // just backed out of a jam: make for the nearest junction before trying again
+  else nav = br ? battleBrain(v) : tagBrain(v);
+  if (nav.direct) return nav.direct;
+  let { tx, tz, aimNode } = nav; const ramming = !!nav.ramming, fire = !!nav.fire, it = state.vehicles[state.it];
   if (aimNode && !sightClear(v.x, v.z, tx, tz)) { // something solid is in the way of that junction: get back to the nearest street first
     const [hx, hz] = nodePos(nearestNode(v.x, v.z)); if (sightClear(v.x, v.z, hx, hz)) { tx = hx; tz = hz; }
   }
   if (v.layer === 'low' && Math.abs(tx) < CH.bridgeW + 4 && !(tz > CH.z0 + CH.slope && tz < CH.z1 - CH.slope)) tx = (v.x >= 0 ? 1 : -1) * (CH.bridgeW + 8);   // down on the bank: climb out beside the bridge, not into its abutment
   if (tz > NORTH - 6) tz = NORTH - 6;                      // keep off the foot of the skyline
-  const { diff, steer } = steerTo(v, tx, tz, turnShare), sharp = Math.abs(diff);
-  const dAim = Math.hypot(tx - v.x, tz - v.z), cruise = v !== it && b.safe ? tune.bot_cruise : 1;
+  const diff = steerTo(v, tx, tz, turnShare).diff + (nav.aimErr || 0), steer = clamp(-diff * 2.4, -1, 1) * turnShare, sharp = Math.abs(diff);
+  const dAim = Math.hypot(tx - v.x, tz - v.z), cruise = nav.cruise || 1;
   let throttle = vf > stat(v, 'top') * speedShare * cruise * (v === it ? tune.it_speed_bonus : 1) ? 0 : 1, hand = false;
   if (!ramming) {
     // corners: lift, then throw it in on the handbrake, the way you would
     if (sharp > 0.5 && vf > tune.bot_corner_speed) { throttle = sharp > 0.85 ? -1 : 0; hand = sharp > 0.8 && vf > tune.bot_corner_speed + 1; }
     if (aimNode && sharp < 0.6) { // a junction with no street straight on: brake in time, or meet the wall
-      const di = Math.round(Math.sin(v.h)), dj = Math.round(Math.cos(v.h)), d = Math.hypot(tx - v.x, tz - v.z);
-      if (!neighbours(aimNode).some(m => m[0] === aimNode[0] + di && m[1] === aimNode[1] + dj) && vf > tune.bot_corner_speed * 0.7 + d * 0.5) throttle = -1;
+      const di = Math.round(Math.sin(v.h)), dj = Math.round(Math.cos(v.h));
+      if (!neighbours(aimNode).some(m => m[0] === aimNode[0] + di && m[1] === aimNode[1] + dj) && vf > tune.bot_corner_speed * 0.7 + dAim * 0.5) throttle = -1;
     }
   }
   if (!ramming && dAim < 26 && sharp > 0.7 && vf > 8) { throttle = -1; hand = false; }   // the spot is inside its turning circle: slow right down for it, never orbit it
   // facing the wrong way: at speed, a handbrake turn; from a crawl, a three-point turn, back then forward
-  if (sharp > 1.7 && vf > 9 && b.tp <= 0) return { throttle: 0, steer: Math.sign(steer) || 1, hand: true };
+  if (sharp > 1.7 && vf > 9 && b.tp <= 0) return { throttle: 0, steer: Math.sign(steer) || 1, hand: true, fire: false };
   if ((sharp > 2.1 && sp < 6) || (b.tp > 0 && sharp > 1.0)) {
     b.tp += STEP; b.slow = 0; const backing = b.tp % 2.2 < 1.1, sgn = -Math.sign(diff) || 1;
     if (b.tp > 7) { b.tp = 0; b.slow = 2; }                // it is not working: treat it as a jam
-    return { throttle: backing ? -1 : 1, steer: backing ? -sgn : sgn, hand: false };
+    return { throttle: backing ? -1 : 1, steer: backing ? -sgn : sgn, hand: false, fire: false };
   }
   b.tp = 0;
-  return { throttle, steer, hand };
+  return { throttle, steer, hand, fire };
 }
 function civDriver(v) { // keeps right, wanders the paved grid, pulls over for a siren
   const c = v.civ, [ax, az] = nodePos(c.from), [bx, bz] = nodePos(c.to);
@@ -656,7 +785,7 @@ function civDriver(v) { // keeps right, wanders the paved grid, pulls over for a
   const want = sirenNear ? (Math.abs(diff) < 0.12 ? 0 : 3) : tune.civ_speed * (Math.abs(diff) > 0.6 ? 0.5 : 1);
   c.stuck = (!sirenNear && Math.abs(vf) < 0.6) ? c.stuck + STEP : 0;
   if (c.stuck > 5) placeCiv(v);
-  return { throttle: vf < want ? 0.7 : (vf > want + 1.5 ? -0.6 : 0), steer, hand: false };
+  return { throttle: vf < want ? 0.7 : (vf > want + 1.5 ? -0.6 : 0), steer, hand: false, fire: false };
 }
 function placeCiv(v) { // somewhere out of the way, pointing down a street
   const p = state.vehicles[ME];
@@ -681,24 +810,42 @@ const LINES = {
   gripes: ['"Is the siren strictly necessary?"', '"I have been waiting SIX minutes."', '"My nephew drives better than this."', '"I would like to speak to the hospital."', '"You took that corner like a bin lorry."', '"Is there a quieter one of these?"', '"The bayou was RIGHT there. You missed it."'],
 };
 const say = (list, it) => { state.msg = list[Math.floor(rng() * list.length)].replace('{it}', it ? SEAT_NAMES[it.i] : ''); state.msgT = 4.5; };
-const freshBot = () => ({ slow: 0, reverse: 0, escape: 0, tp: 0, prey: null, safe: false, think: 0, dodge: 0, dodgeCool: 0, jams: 0, jamT: 0, node: null });
+const freshBot = () => ({ slow: 0, reverse: 0, escape: 0, tp: 0, prey: null, safe: false, think: 0, dodge: 0, dodgeCool: 0, jams: 0, jamT: 0, node: null,
+  way: null, wayT: 0, wayPrey: null, react: 0, goal: 'roam', crate: null, seen: null, chaseT: 0, shun: null, shunT: 0 });
 function newVehicle(kind, i) {
   return { kind, i, active: true, x: 0, z: 0, h: 0, y: 0, pitch: 0, vx: 0, vz: 0, px: 0, pz: 0, ph: 0, spin: 0, grip: tune.grip, drift: false, stall: 0, immune: 0, clean: 0, tags: 0,
-    layer: null, surf: 'road', inp: { throttle: 0, steer: 0, hand: false }, bot: freshBot(), civ: null, smoke: 0 };
+    layer: null, surf: 'road', inp: { throttle: 0, steer: 0, hand: false, fire: false }, bot: freshBot(), civ: null, smoke: 0,
+    hp: 100, ammo: 0, kills: 0, deaths: 0, dead: 0, shield: 0, cool: 0, hurt: 0, lastHitBy: -1 };
 }
 function reset() { // a new shift
   seed = Number(params.get('seed')) || CONFIG.seed;
   state = { t: 0, score: 0, gained: '', round: 1, phase: 'countdown', clock: 0, count: 0, it: 1, vehicles: [], msg: '', msgT: 0, shake: 0, flash: 0,
-    camYaw: 0, camPrev: 0, camLow: 0, fly: 0, flyFrom: [0, 0, 0], gripe: 0, gripeT: 0, totals: Array(NR).fill(0), stars: 0, lastTick: 9, roles: [0, 1, 2] };
+    camYaw: 0, camPrev: 0, camLow: 0, fly: 0, flyFrom: [0, 0, 0], gripe: 0, gripeT: 0, totals: Array(NR).fill(0), stars: 0, lastTick: 9, roles: [0, 1, 2],
+    shots: [], pickups: [], feed: [], result: null, hitMark: 0, hurtFlash: 0, pop: '', popT: 0 };
   for (let i = 0; i < NR; i++) state.vehicles.push(newVehicle(RIGS[i % 4], i));
   for (let i = 0; i < MAX_CIV; i++) state.vehicles.push(newVehicle('civ', NR + i));
-  startRound(1);
+  if (MODE === 'br') startBattle(); else startRound(1);
 }
 const STARTS = [ // per round: [x, z, heading] for you, then each bot in turn; and which of those starts IT
   { at: [[0, -60, 0], [0, 60, Math.PI], [60, -60, -Math.PI / 2], [-60, -60, Math.PI / 2], [60, 60, Math.PI], [-60, 60, Math.PI], [120, 0, -Math.PI / 2], [-120, 0, Math.PI / 2]], it: 1 },   // a bot, two blocks up the street, coming for you
   { at: [[-60, 0, Math.PI / 2], [60, 60, Math.PI], [60, 0, -Math.PI / 2], [-60, -120, 0], [0, -60, 0], [0, 120, Math.PI], [120, -60, -Math.PI / 2], [-120, 60, 0]], it: 2 },
   { at: [[0, 60, 0], [60, 120, -Math.PI / 2], [-60, 60, Math.PI / 2], [0, 180, Math.PI / 2], [60, 0, 0], [-60, 0, 0], [120, 120, Math.PI], [-120, 120, Math.PI]], it: 0 },   // the last round opens with him aboard your rig, the bridge dead ahead
 ];
+const placeCivs = () => state.vehicles.forEach((v, i) => { if (i >= NR) { v.active = i - NR < tune.civ_count; if (v.active) placeCiv(v); else { v.x = 999; v.z = 999 + i * 9; } } });
+const seats = () => state.roles.map(i => state.vehicles[i]);   // everyone in the match, wrecked or not
+function startBattle() { // Battle Royale: everyone starts armed and healthy, nobody is IT
+  state.round = 1; state.phase = 'countdown'; state.count = tune.countdown; state.clock = tune.br_time; state.lastTick = 9; state.it = -1;
+  const roles = [ME, ...botSeats()]; state.roles = roles;
+  state.vehicles.forEach((v, i) => {
+    Object.assign(v, { vx: 0, vz: 0, spin: 0, stall: 0, immune: 0, drift: false, grip: tune.grip, clean: 0, bot: freshBot(), layer: null, y: 0, pitch: 0,
+      hp: tune.br_hp, ammo: tune.br_ammo_start, kills: 0, deaths: 0, dead: 0, shield: tune.br_protect, cool: 0, hurt: 0, lastHitBy: -1 });   // everyone starts protected, as after a respawn
+    if (i < NR) { v.active = roles.includes(i); if (v.active) [v.x, v.z, v.h] = STARTS[0].at[roles.indexOf(i)]; else { v.x = 900; v.z = 900 + i * 12; } v.px = v.x; v.pz = v.z; v.ph = v.h; }
+  });
+  placeCivs();
+  state.shots = []; state.feed = []; state.result = null; state.pickups = PICKUPS.map(p => ({ ...p, wait: 0 }));
+  state.fly = 0; state.camLow = 0; state.camYaw = state.camPrev = state.vehicles[ME].h;
+  state.msg = 'Dispatch: weapons free. Most wrecks in three minutes wins.'; state.msgT = 4.5;
+}
 function startRound(n) {
   state.round = n; state.phase = 'countdown'; state.count = tune.countdown; state.clock = tune.round_time; state.lastTick = 9;
   const s = STARTS[(n - 1) % STARTS.length], roles = [ME, ...botSeats()]; state.roles = roles;
@@ -706,7 +853,7 @@ function startRound(n) {
     Object.assign(v, { vx: 0, vz: 0, spin: 0, stall: 0, immune: 0, drift: false, grip: tune.grip, clean: 0, bot: freshBot(), layer: null, y: 0, pitch: 0 });
     if (i < NR) { v.active = roles.includes(i); if (v.active) [v.x, v.z, v.h] = s.at[roles.indexOf(i)]; else { v.x = 900; v.z = 900 + i * 12; } v.px = v.x; v.pz = v.z; v.ph = v.h; }
   });
-  state.vehicles.forEach((v, i) => { if (i >= NR) { v.active = i - NR < tune.civ_count; if (v.active) placeCiv(v); else { v.x = 999; v.z = 999 + i * 9; } } });
+  placeCivs(); state.shots = []; state.pickups = []; state.feed = [];
   state.it = roles[s.it]; state.fly = 0; state.camLow = 0; state.camYaw = state.camPrev = state.vehicles[ME].h;
   say([LINES.start[s.it === 0 ? 2 : (n - 1) % 2]], state.vehicles[state.it]);
 }
@@ -799,7 +946,11 @@ function hitVehicles() {
     }
     if (closing <= 0) continue;
     if (closing > 4) crash(A.i === ME ? A : B, closing * 1.3, (A.i === ME || B.i === ME) ? 1 : 0.5);
-    if (closing >= tune.tag_min_speed && A.i < NR && B.i < NR && state.phase === 'run') {
+    if (MODE === 'br' && closing > tune.br_ram_min && A.i < NR && B.i < NR && state.phase === 'run') { // a hard ram hurts both, the lighter rig more
+      const ma = stat(A, 'mass'), mb = stat(B, 'mass'), base = (closing - tune.br_ram_min) * tune.br_ram_damage * 2 / (ma + mb);
+      hurt(A, base * mb, B.i, 'ram'); hurt(B, base * ma, A.i, 'ram');
+    }
+    if (MODE === 'tag' && closing >= tune.tag_min_speed && A.i < NR && B.i < NR && state.phase === 'run') {
       if (A.i === state.it && B.immune <= 0) tag(A, B); else if (B.i === state.it && A.immune <= 0) tag(B, A);
     }
   }
@@ -814,6 +965,93 @@ function tag(from, to) { // the ram is the hand-off: once, then a grace before h
   else if (from.i === ME) { say(LINES.gaveHim, to); tone(440, 0.12, 'square', 0.25); tone(660, 0.12, 'square', 0.25, 990); }
   else say(LINES.other, to);
 }
+// ---- Battle Royale: the blaster, damage, wrecks and respawns. One set of rules for you and the bots.
+function fire(v) {
+  if (v.ammo <= 0 || v.cool > 0 || v.stall > 0 || !v.active) return false;
+  const fx = Math.sin(v.h), fz = Math.cos(v.h), nose = KINDS[v.kind].len / 2 + 1;
+  state.shots.push({ x: v.x + fx * nose, z: v.z + fz * nose, y: v.y + 1.5, vx: fx * tune.br_shot_speed, vz: fz * tune.br_shot_speed, life: tune.br_shot_life, owner: v.i, layer: v.layer });
+  v.ammo--; v.cool = tune.br_fire_cooldown; v.shield = 0;      // firing ends your protection
+  const me = state.vehicles[ME], near = clamp(1 - Math.hypot(v.x - me.x, v.z - me.z) / 110, 0, 1);
+  if (near > 0) tone(v.i === ME ? 940 : 700, 0.11, 'square', 0.05 + 0.13 * near, 180);
+  puff(v.x + fx * nose, v.y + 1.5, v.z + fz * nose, fx * 6, 1, fz * 6, 0.4, 0.15, 0xffffff);
+  return true;
+}
+function hurt(v, dmg, by, how) {
+  if (!v.active || v.dead > 0 || state.phase !== 'run' || dmg <= 0) return;
+  if (v.shield > 0) { puff(v.x, v.y + 2, v.z, 0, 6, 0, 0.4, 0.3, 0x7df0ff); return; }   // protected: the hit sparks off
+  v.hp -= dmg; v.hurt = 0.25;
+  if (by >= 0 && by !== v.i) { v.lastHitBy = by; const a = state.vehicles[by]; if (a.bot) a.bot.chaseT = 0; }
+  events.push({ t: state.t, hit: [by, v.i, how, Math.round(dmg)] });
+  for (let i = 0; i < 4; i++) puff(v.x, v.y + 1.6, v.z, (rng() - 0.5) * 14, 3 + rng() * 6, (rng() - 0.5) * 14, 0.35, 0.4, i % 2 ? 0xffe14a : 0xff5e3a);
+  if (by === ME && how === 'shot') { state.hitMark = 0.28; tone(1250, 0.06, 'square', 0.2); }
+  if (v.i === ME) { state.hurtFlash = 0.35; state.shake = Math.max(state.shake, 0.5); tone(150, 0.16, 'sawtooth', 0.25, 70); }
+  if (v.hp <= 0) wreck(v);
+}
+function wreck(v) { // one wreck, one kill: to whoever landed the last hit
+  const killer = v.lastHitBy >= 0 && v.lastHitBy !== v.i ? state.vehicles[v.lastHitBy] : null;
+  v.deaths++; v.hp = 0; v.dead = tune.br_respawn_delay; v.active = false; v.vx = v.vz = 0; v.lastHitBy = -1;
+  if (killer) killer.kills++;
+  events.push({ t: state.t, kill: [killer ? killer.i : -1, v.i] });
+  state.feed.unshift({ text: `${killer ? SEAT_NAMES[killer.i] : 'The road'} wrecked ${SEAT_NAMES[v.i]}`, t: 5, mine: v.i === ME || (killer && killer.i === ME) }); state.feed.length = Math.min(state.feed.length, 4);
+  for (let i = 0; i < 22; i++) puff(v.x + (rng() - 0.5) * 4, v.y + 1 + rng() * 2, v.z + (rng() - 0.5) * 4, (rng() - 0.5) * 22, 5 + rng() * 14, (rng() - 0.5) * 22, i < 10 ? 2.6 : 0.4, i < 10 ? 1.1 : 0.9, [0xff5e3a, 0xffe14a, 0xff2e63, 0x3a3158][i % 4]);
+  const me = state.vehicles[ME], near = clamp(1 - Math.hypot(v.x - me.x, v.z - me.z) / 140, 0, 1);
+  if (near > 0) { crunch(near); state.shake = Math.max(state.shake, near * 1.2); }
+  if (killer && killer.i === ME) { state.pop = `WRECKED ${SEAT_NAMES[v.i].toUpperCase()}!`; state.popT = 1.8; tone(523, 0.1, 'square', 0.25); tone(784, 0.25, 'square', 0.25, 1047); }
+  if (v.i === ME) { state.pop = killer ? `WRECKED BY ${SEAT_NAMES[killer.i].toUpperCase()}` : 'WRECKED'; state.popT = tune.br_respawn_delay; }
+}
+function respawn(v) { // at the junction furthest from everyone, protected for a moment
+  let best = [0, 0], bestD = -1;
+  for (let i = 0; i < 5; i++) for (let j = 0; j < 5; j++) {
+    const [x, z] = nodePos([i, j]); let d = 1e9;
+    for (const o of state.vehicles) if (o.active && o !== v) d = Math.min(d, Math.hypot(o.x - x, o.z - z));
+    for (const sh of state.shots) d = Math.min(d, Math.hypot(sh.x - x, sh.z - z) * 2);
+    if (d > bestD) { bestD = d; best = [x, z]; }
+  }
+  const h = Math.abs(best[0]) > Math.abs(best[1]) ? (best[0] > 0 ? -Math.PI / 2 : Math.PI / 2) : (best[1] > 0 ? Math.PI : 0);   // facing back into town
+  Object.assign(v, { x: best[0], z: best[1], h, px: best[0], pz: best[1], ph: h, vx: 0, vz: 0, spin: 0, stall: 0, layer: null, y: 0, pitch: 0, active: true, dead: 0,
+    hp: tune.br_hp, ammo: tune.br_ammo_start, shield: tune.br_protect, cool: 0.3, hurt: 0, lastHitBy: -1, bot: freshBot() });
+  if (v.i === ME) { state.camYaw = state.camPrev = h; state.pop = ''; state.popT = 0; tone(660, 0.2, 'square', 0.2, 990); }
+  events.push({ t: state.t, respawn: [v.i, Math.round(bestD)] });
+}
+function battleStep(dt) {
+  // bolts fly straight and level until they hit a wall, a trunk or a rig
+  for (const sh of state.shots) {
+    sh.life -= dt; sh.x += sh.vx * dt; sh.z += sh.vz * dt;
+    let gone = sh.life <= 0;
+    if (!gone && (walls.some(w => sh.x > w.x0 && sh.x < w.x1 && sh.z > w.z0 && sh.z < w.z1) || posts.some(p => Math.hypot(p.x - sh.x, p.z - sh.z) < p.r + 0.3))) { gone = true; puff(sh.x, sh.y, sh.z, 0, 4, 0, 0.4, 0.25, 0xffffff); }
+    if (!gone) for (const v of rigs()) {
+      if (v.i === sh.owner || (sh.layer && v.layer && sh.layer !== v.layer)) continue;
+      if (circles(v).some(([cx, cz, r]) => Math.hypot(cx - sh.x, cz - sh.z) < r + tune.br_shot_radius)) { hurt(v, tune.br_damage, sh.owner, 'shot'); gone = true; break; }
+    }
+    sh.gone = gone;
+  }
+  state.shots = state.shots.filter(sh => !sh.gone);
+  // crates: drive over one to load up; it comes back after a while
+  state.pickups.forEach((p, n) => {
+    if (p.wait > 0) { p.wait -= dt; return; }
+    for (const v of rigs()) if (v.ammo < tune.br_ammo_max && (v.layer || null) === p.layer && Math.hypot(v.x - p.x, v.z - p.z) < 3.8) {
+      const got = Math.min(tune.br_pickup_ammo, tune.br_ammo_max - v.ammo); v.ammo += got; p.wait = tune.br_pickup_respawn; events.push({ t: state.t, pickup: [v.i, n] });
+      if (v.i === ME) { state.pop = `+${got} AMMO`; state.popT = 1.2; tone(880, 0.07, 'square', 0.2); tone(1320, 0.12, 'square', 0.2); }
+      break;
+    }
+  });
+  for (const f of state.feed) f.t -= dt; state.feed = state.feed.filter(f => f.t > 0);
+  for (const v of seats()) if (v.dead > 0) { v.dead -= dt; if (v.dead <= 0) respawn(v); }
+  state.score = state.vehicles[ME].kills;
+  state.clock -= dt;
+  if (state.clock <= 10 && Math.ceil(state.clock) < state.lastTick) { state.lastTick = Math.ceil(state.clock); tone(600, 0.08, 'square', 0.15); }
+  if (state.clock <= 0) endBattle();
+}
+function endBattle() { // the buzzer: scoring stops here
+  state.clock = 0; state.phase = 'done'; state.shots = [];
+  const rows = seats().map(v => ({ i: v.i, kills: v.kills, deaths: v.deaths })).sort((a, b) => b.kills - a.kills || a.deaths - b.deaths || a.i - b.i);
+  for (const r of rows) r.place = 1 + rows.filter(o => o.kills > r.kills).length;
+  const leaders = rows.filter(r => r.place === 1), draw = leaders.length > 1;
+  state.result = { rows, draw, leaders: leaders.map(r => r.i) };
+  state.gained = draw ? `Draw: ${leaders.map(r => SEAT_NAMES[r.i]).join(' and ')} tie on ${leaders[0].kills} wreck${leaders[0].kills === 1 ? '' : 's'}`
+    : `${leaders[0].i === ME ? 'You win' : SEAT_NAMES[leaders[0].i] + ' wins'} with ${leaders[0].kills} wreck${leaders[0].kills === 1 ? '' : 's'}`;
+  scene = 'brResults'; [523, 659, 784].forEach((f, i) => setTimeout(() => tone(f, 0.3, 'square', 0.2), i * 140));
+}
 function resetOnRoad(v) { // back on the nearest street, facing along it
   const n = nearestNode(v.x, v.z), [nx, nz] = nodePos(n), alongX = Math.abs(v.x - nx) > Math.abs(v.z - nz);
   if (alongX) { v.z = nz; v.x = clamp(v.x, -120, 120); v.h = Math.sin(v.h) >= 0 ? Math.PI / 2 : -Math.PI / 2; }
@@ -827,32 +1065,37 @@ function resetOnRoad(v) { // back on the nearest street, facing along it
 
 function playStep(dt) {
   state.t += dt;
-  const vs = state.vehicles;
+  const vs = state.vehicles, br = MODE === 'br';
   for (const v of vs) { v.px = v.x; v.pz = v.z; v.ph = v.h; }
   state.camPrev = state.camYaw;
   if (state.msgT > 0) state.msgT -= dt;
   state.shake *= Math.exp(-6 * dt); if (state.flash > 0) state.flash -= dt; if (state.fly > 0) state.fly -= dt;
+  if (state.hitMark > 0) state.hitMark -= dt; if (state.hurtFlash > 0) state.hurtFlash -= dt; if (state.popT > 0) state.popT -= dt;
   if (state.phase === 'countdown') {
     state.count -= dt;
     const beep = Math.ceil(state.count * 3 / Math.max(tune.countdown, 0.01));
     if (beep < state.lastTick && state.count > 0) { state.lastTick = beep; tone(440, 0.12, 'square', 0.2); }
     if (state.count <= 0) { state.phase = 'run'; tone(880, 0.35, 'square', 0.25); }
   } else {
-    if (pressed('KeyR')) resetOnRoad(vs[ME]);
+    if (pressed('KeyR') && vs[ME].active) resetOnRoad(vs[ME]);
     for (const v of vs) { if (!v.active) continue; v.inp = v.i === ME ? humanDriver() : v.i < NR ? botDriver(v) : civDriver(v); }
     for (const v of vs) if (v.active) drive(v, dt);
+    if (br) for (const v of rigs()) { if (v.cool > 0) v.cool -= dt; if (v.shield > 0) v.shield -= dt; if (v.hurt > 0) v.hurt -= dt; if (v.inp.fire) fire(v); }
     hitVehicles();
     for (const v of vs) if (v.active) hitWorld(v);
     for (const v of vs) { // on the bridge or down on the bank: decided as a rig enters the bayou, kept until it leaves
       if (!v.active) continue;
       if (!(v.z > CH.z0 && v.z < CH.z1)) v.layer = null; else if (!v.layer) v.layer = Math.abs(v.x) < CH.bridgeW ? 'deck' : 'low';
     }
-    for (const v of rigs()) if (v.i !== state.it) v.clean += dt;
-    state.score = Math.floor(state.totals[ME] + vs[ME].clean);
-    if (state.it === ME) { state.gripeT -= dt; if (state.gripeT <= 0) { state.gripeT = 4.2; state.gripe = (state.gripe + 1) % LINES.gripes.length; } }
-    state.clock -= dt;
-    if (state.clock <= 10 && Math.ceil(state.clock) < state.lastTick) { state.lastTick = Math.ceil(state.clock); tone(state.it === ME ? 300 : 600, 0.08, 'square', 0.15); }
-    if (state.clock <= 0) endRound();
+    if (br) battleStep(dt);
+    else {
+      for (const v of rigs()) if (v.i !== state.it) v.clean += dt;
+      state.score = Math.floor(state.totals[ME] + vs[ME].clean);
+      if (state.it === ME) { state.gripeT -= dt; if (state.gripeT <= 0) { state.gripeT = 4.2; state.gripe = (state.gripe + 1) % LINES.gripes.length; } }
+      state.clock -= dt;
+      if (state.clock <= 10 && Math.ceil(state.clock) < state.lastTick) { state.lastTick = Math.ceil(state.clock); tone(state.it === ME ? 300 : 600, 0.08, 'square', 0.15); }
+      if (state.clock <= 0) endRound();
+    }
   }
   for (const v of vs) { // the ground under each rig: flat on the streets and the bridge, sloping down the banks
     if (!v.active) continue;
@@ -883,26 +1126,36 @@ function endRound() {
 // ---- Drawing -------------------------------------------------------------------------------
 const v3 = new THREE.Vector3();
 function place(alpha) { // meshes follow the simulation, between the last two steps
+  const br = MODE === 'br';
   for (const v of state.vehicles) {
     const m = meshes[v.i]; m.visible = v.active; if (!v.active) continue;
     const x = lerp(v.px, v.x, alpha), z = lerp(v.pz, v.z, alpha), h = v.ph + wrapA(v.h - v.ph) * alpha;
     const side = (v.vx * Math.cos(v.h) - v.vz * Math.sin(v.h));
     m.position.set(x, v.y, z); m.rotation.set(v.pitch * Math.cos(v.h), h, clamp(side * 0.02, -0.16, 0.16));   // a little body roll in a slide
+    m.scale.setScalar(br && v.hurt > 0 ? 1 + v.hurt * 0.5 : 1);                                              // a hit makes the rig jolt
     const on = Math.floor(state.t * 7) % 2, amber = m.userData.amber;
     m.userData.lights.forEach((l, i) => l.material.color.set(amber ? (i === on ? 0xffc400 : 0x553f00) : i === on ? (i ? 0x6fa0ff : 0xff5060) : (i ? 0x0a1c55 : 0x55060c)));
-    if (v.i < NR) { const r = safeRings[v.i]; r.visible = v.immune > 0; if (r.visible) { const k = v.immune / tune.tagback_grace; r.position.set(x, v.y + 0.25, z); r.scale.setScalar(0.75 + 0.35 * k + 0.05 * Math.sin(state.t * 16)); r.material.opacity = 0.35 + 0.55 * k; } }
+    if (v.i < NR) { // a ring under a rig that cannot be touched yet: green for no tag-backs, blue for a fresh respawn
+      const r = safeRings[v.i], left = br ? v.shield / tune.br_protect : v.immune / tune.tagback_grace; r.visible = left > 0;
+      if (r.visible) { r.material.color.set(br ? 0x7df0ff : 0x7dff5a); r.position.set(x, v.y + 0.25, z); r.scale.setScalar(0.75 + 0.35 * left + 0.05 * Math.sin(state.t * 16)); r.material.opacity = 0.35 + 0.55 * left; }
+    }
   }
   safeRings.forEach((r, i) => { if (!state.vehicles[i].active) r.visible = false; });
-  const it = state.vehicles[state.it], im = meshes[state.it];
-  let px = im.position.x, py = im.position.y + im.userData.roof, pz = im.position.z;
-  if (state.fly > 0) { const k = 1 - state.fly / 0.55; px = lerp(state.flyFrom[0], px, k); pz = lerp(state.flyFrom[2], pz, k); py = lerp(state.flyFrom[1], py, k) + Math.sin(k * Math.PI) * 9; patient.rotation.x = k * Math.PI * 4; } else patient.rotation.x = 0;
-  patient.position.set(px, py, pz); patient.rotation.y = im.rotation.y;
-  fist.rotation.z = -0.5 + Math.sin(state.t * 14) * 0.5;
-  const sp = Math.hypot(it.vx, it.vz), pos = gown.geometry.attributes.position;
-  for (let i = 0; i < pos.count; i++) { const back = -pos.getZ(i); pos.setY(i, Math.sin(state.t * (9 + sp * 0.4) - back * 2.2) * 0.13 * back * (0.4 + Math.min(sp / 14, 1)) - back * 0.05 * Math.max(0, 1 - sp / 6)); }
-  pos.needsUpdate = true;
-  const bob = Math.sin(state.t * 5) * 0.5; marker.position.set(px, py + (state.it === ME ? 3.6 : 6.5) + bob, pz);   // lower over your own roof, so it stays in view
-  const far = Math.hypot(px - cam.position.x, pz - cam.position.z), ms = state.it === ME ? 2.6 : clamp(far * 0.085, 5, 16); marker.scale.set(ms, ms, 1);
+  crateMeshes.forEach((g, n) => { const p = state.pickups[n]; g.visible = br && !!p && p.wait <= 0; if (g.visible) { g.rotation.y = state.t * 1.6 + n; g.position.y = g.userData.y + Math.sin(state.t * 3 + n) * 0.25; } });
+  boltMeshes.forEach((m, n) => { const sh = br && state.shots[n]; m.visible = !!sh; if (sh) { m.position.set(sh.x, sh.y, sh.z); m.rotation.y = Math.atan2(sh.vx, sh.vz); m.material.color.set(sh.owner === ME ? 0x7df0ff : 0xff6ab0); } });
+  const tagOn = state.it >= 0; patient.visible = marker.visible = tagOn;
+  if (tagOn) {
+    const it = state.vehicles[state.it], im = meshes[state.it];
+    let px = im.position.x, py = im.position.y + im.userData.roof, pz = im.position.z;
+    if (state.fly > 0) { const k = 1 - state.fly / 0.55; px = lerp(state.flyFrom[0], px, k); pz = lerp(state.flyFrom[2], pz, k); py = lerp(state.flyFrom[1], py, k) + Math.sin(k * Math.PI) * 9; patient.rotation.x = k * Math.PI * 4; } else patient.rotation.x = 0;
+    patient.position.set(px, py, pz); patient.rotation.y = im.rotation.y;
+    fist.rotation.z = -0.5 + Math.sin(state.t * 14) * 0.5;
+    const sp = Math.hypot(it.vx, it.vz), pos = gown.geometry.attributes.position;
+    for (let i = 0; i < pos.count; i++) { const back = -pos.getZ(i); pos.setY(i, Math.sin(state.t * (9 + sp * 0.4) - back * 2.2) * 0.13 * back * (0.4 + Math.min(sp / 14, 1)) - back * 0.05 * Math.max(0, 1 - sp / 6)); }
+    pos.needsUpdate = true;
+    const bob = Math.sin(state.t * 5) * 0.5; marker.position.set(px, py + (state.it === ME ? 3.6 : 6.5) + bob, pz);   // lower over your own roof, so it stays in view
+    const far = Math.hypot(px - cam.position.x, pz - cam.position.z), ms = state.it === ME ? 2.6 : clamp(far * 0.085, 5, 16); marker.scale.set(ms, ms, 1);
+  }
   for (const q of puffs) { if (q.life <= 0) { q.m.visible = false; continue; } const k = q.life / q.max, s = q.size * (q.size < 0.5 ? 1 : 2.4 - k * 1.4); q.m.position.set(q.x, q.y, q.z); q.m.scale.set(s, s, s); q.m.rotation.set(q.x, q.y * 3, q.z); q.m.material.opacity = k * 0.8; }
 }
 function render() {
@@ -947,10 +1200,64 @@ function minimap(mx, my, ms) {
   ctx.fillStyle = '#f2f2ff'; { const [ax, az] = mp(CH.bridgeW, CH.z1); ctx.fillRect(ax, az, CH.bridgeW * 2 * k, (CH.z1 - CH.z0) * k); }           // the bridge
   ctx.fillStyle = '#6a5a9a';
   for (const w of walls) { if (w.x1 - w.x0 > 100 || w.z1 - w.z0 > 100) continue; const [ax, az] = mp(w.x1, w.z1); ctx.fillRect(ax, az, (w.x1 - w.x0) * k, (w.z1 - w.z0) * k); }
+  if (MODE === 'br') { ctx.fillStyle = '#ffe14a'; for (const p of state.pickups) if (p.wait <= 0) { const [ax, az] = mp(p.x, p.z); ctx.fillRect(ax - 2.5, az - 2.5, 5, 5); } }   // ammo crates
   const vs = state.vehicles;
   for (let i = vs.length - 1; i >= 0; i--) { const v = vs[i]; if (!v.active) continue; const [ax, az] = mp(v.x, v.z); icon(v.kind, ax, az, i < NR ? 6 : 3.5, i === state.it); }
 }
+function brHud() { // Battle Royale: clock, wrecks, your health and ammo, rivals' health, where your bolts go
+  const vs = state.vehicles, me = vs[ME], PH = phoneHud(), S = seats();
+  const c = Math.max(0, state.clock), urgent = c <= 10, clockText = `${Math.floor(c / 60)}:${String(Math.floor(c % 60)).padStart(2, '0')}`;
+  for (const v of rigs()) { // each rival's health, over its roof
+    if (v === me) continue; const d = Math.hypot(v.x - me.x, v.z - me.z); if (d > 150) continue;
+    const s = toScreen(v.x, v.y + meshes[v.i].userData.roof + 2.4, v.z); if (s.behind || s.x < 0 || s.x > W || s.y < 0) continue;
+    const w = clamp(900 / d, 28, 92) * (PH ? 1.3 : 1), h = PH ? 10 : 7;
+    panel(s.x - w / 2 - 2, s.y - 2, w + 4, h + 4, 'rgba(20,12,48,0.85)'); panel(s.x - w / 2, s.y, w * clamp(v.hp / tune.br_hp, 0, 1), h, v.shield > 0 ? '#7df0ff' : v.hp > 50 ? '#7dff5a' : v.hp > 25 ? '#ffe14a' : '#ff5060');
+  }
+  if (me.active) { // a sight where your bolts will go, and a cross on it when one lands
+    const f = toScreen(me.x + Math.sin(me.h) * 45, me.y + 1.5, me.z + Math.cos(me.h) * 45);
+    if (!f.behind) {
+      ctx.strokeStyle = me.ammo > 0 ? 'rgba(125,240,255,0.95)' : 'rgba(255,255,255,0.35)'; ctx.lineWidth = 3;
+      ctx.beginPath(); ctx.arc(f.x, f.y, 13, 0, 7); ctx.moveTo(f.x - 22, f.y); ctx.lineTo(f.x - 7, f.y); ctx.moveTo(f.x + 7, f.y); ctx.lineTo(f.x + 22, f.y); ctx.stroke();
+      if (state.hitMark > 0) { ctx.strokeStyle = '#fff'; ctx.lineWidth = 5; ctx.beginPath(); for (const [a, b] of [[-1, -1], [1, -1], [-1, 1], [1, 1]]) { ctx.moveTo(f.x + a * 10, f.y + b * 10); ctx.lineTo(f.x + a * 26, f.y + b * 26); } ctx.stroke(); }
+    }
+  }
+  const status = !me.active ? `WRECKED: BACK IN ${Math.max(0, me.dead).toFixed(1)} s` : me.shield > 0 ? `PROTECTED ${me.shield.toFixed(1)} s (ENDS IF YOU FIRE)` : me.ammo === 0 ? 'NO AMMO: GRAB A YELLOW CRATE' : '';
+  const statusBg = !me.active ? 'rgba(160,20,60,0.92)' : me.shield > 0 ? 'rgba(20,90,120,0.92)' : 'rgba(255,225,74,0.96)', statusInk = !me.active || me.shield > 0 ? '#fff' : PAL.ink;
+  const hpBar = (x, y, w, h, fs) => { panel(x - 3, y - 3, w + 6, h + 6); panel(x, y, w * clamp(me.hp / tune.br_hp, 0, 1), h, me.hp > 50 ? '#3fbf3a' : me.hp > 25 ? '#d9a800' : '#e0304a'); text(`HEALTH ${Math.max(0, Math.ceil(me.hp))}`, x + w / 2, y + h / 2 + 1, fs, '#fff'); };
+  if (PH) { // a phone: fewer things, much bigger, all at the top so the thumbs own the bottom
+    panel(W / 2 - 120, 8, 240, 92, urgent ? 'rgba(160,20,60,0.92)' : undefined);
+    text(clockText, W / 2, 46, 62, '#fff'); text('BATTLE ROYALE', W / 2, 84, 20, '#ffe14a');
+    hpBar(W / 2 - 398, 111, 500, 38, 26); panel(W / 2 + 112, 108, 288, 44); text(`AMMO ${me.ammo}`, W / 2 + 256, 131, 30, me.ammo ? '#7df0ff' : '#ff6a8a');
+    const line = status || (state.feed[0] ? state.feed[0].text : state.msgT > 0 ? state.msg : '');
+    if (line) { panel(W / 2 - 400, 158, 800, 44, status ? statusBg : undefined); text(line, W / 2, 180, 24, status ? statusInk : '#fff'); }
+    const rh = S.length > 5 ? 31 : 44, fs = S.length > 5 ? 22 : 28;
+    panel(12, 8, 196, 14 + S.length * rh);
+    S.forEach((v, n) => { const y = 8 + rh * 0.62 + n * rh; ctx.globalAlpha = v.active ? 1 : 0.4; icon(v.kind, 40, y, rh > 40 ? 11 : 8, false); ctx.globalAlpha = 1; text(v.i === ME ? 'YOU' : '', 66, y, rh > 40 ? 20 : 17, '#ffe14a', 'left'); text(`${v.kills}`, 198, y, fs, v.i === ME ? PAL.it : '#fff', 'right'); });
+    minimap(W - 150, 14, 176);
+  } else {
+    panel(W / 2 - 96, 14, 192, 62, urgent ? 'rgba(160,20,60,0.9)' : undefined);
+    text(clockText, W / 2, 40, 38, '#fff'); text('BATTLE ROYALE', W / 2, 66, 14, '#ffe14a');
+    panel(16, 14, 300, 38 + S.length * 28); text('WRECKS / LOSSES', 30, 31, 15, '#ffe14a', 'left');
+    S.forEach((v, n) => { const y = 58 + n * 28; ctx.globalAlpha = v.active ? 1 : 0.4; icon(v.kind, 40, y, 8, false); text(who(v.i), 60, y, 17, v.i === ME ? PAL.it : '#fff', 'left'); ctx.globalAlpha = 1; text(`${v.kills} / ${v.deaths}`, 304, y, 17, '#fff', 'right'); });
+    minimap(W - 148, 16, 172);
+    state.feed.slice(0, 3).forEach((f, n) => { panel(W - 330, 204 + n * 30, 314, 26, f.mine ? 'rgba(255,225,74,0.92)' : undefined); text(f.text, W - 22, 217 + n * 30, 15, f.mine ? PAL.ink : '#fff', 'right'); });
+    hpBar(W / 2 - 300, H - 60, 380, 30, 18); panel(W / 2 + 96, H - 63, 207, 36); text(`AMMO ${me.ammo}`, W / 2 + 200, H - 44, 22, me.ammo ? '#7df0ff' : '#ff6a8a');
+    if (status) { panel(W / 2 - 300, H - 118, 600, 46, statusBg); text(status, W / 2, H - 94, 22, statusInk); }
+    if (state.msgT > 0) { ctx.globalAlpha = Math.min(1, state.msgT * 2); panel(W / 2 - 400, 92, 800, 40); text(state.msg, W / 2, 112, 20, '#fff'); ctx.globalAlpha = 1; }
+  }
+  if (state.popT > 0 && state.pop) { const y = PH ? 250 : 190, fs = PH ? 44 : 36; text(state.pop, W / 2 + 3, y + 3, fs, PAL.ink); text(state.pop, W / 2, y, fs, PAL.it); }
+  if (me.active && me.ammo === 0) { // out of ammo: an arrow to the nearest crate
+    const cr = nearestCrate(me);
+    if (cr) { const s = toScreen(cr.p.x, 2, cr.p.z); let dx = s.x - W / 2, dy = s.y - H / 2; if (s.behind) { dx = -dx; dy = Math.abs(dy) + 200; }
+      if (s.behind || s.x < 40 || s.x > W - 40 || s.y < 40 || s.y > H - 40) { const a = Math.atan2(dy, dx), ex = clamp(W / 2 + Math.cos(a) * 900, PH ? 270 : 70, W - (PH ? 250 : 70)), ey = clamp(H / 2 + Math.sin(a) * 900, PH ? 230 : 160, H - 150);
+        ctx.save(); ctx.translate(ex, ey); ctx.rotate(a); ctx.fillStyle = PAL.it; ctx.strokeStyle = PAL.ink; ctx.lineWidth = 4; ctx.beginPath(); ctx.moveTo(30, 0); ctx.lineTo(-16, -22); ctx.lineTo(-6, 0); ctx.lineTo(-16, 22); ctx.closePath(); ctx.stroke(); ctx.fill(); ctx.restore(); } }
+  }
+  if (touch.on) touchHud();
+  if (state.phase === 'countdown') { const n = Math.ceil(state.count * 3 / Math.max(tune.countdown, 0.01)); panel(W / 2 - 90, H / 2 - 110, 180, 120); text(String(clamp(n, 1, 3)), W / 2, H / 2 - 50, 96, PAL.it); }
+  if (state.hurtFlash > 0) { ctx.fillStyle = `rgba(255,40,70,${Math.min(0.75, state.hurtFlash * 2)})`; ctx.fillRect(0, 0, W, 46); ctx.fillRect(0, H - 46, W, 46); ctx.fillRect(0, 46, 46, H - 92); ctx.fillRect(W - 46, 46, 46, H - 92); }   // a red frame when you are hit
+}
 function hud() {
+  if (MODE === 'br') return brHud();
   const vs = state.vehicles, it = vs[state.it], me = vs[ME], youIt = state.it === ME, PH = phoneHud(), R = rigs();
   const c = Math.max(0, state.clock), urgent = c <= 10, clockText = `${Math.floor(c / 60)}:${String(Math.floor(c % 60)).padStart(2, '0')}`;
   const dIt = Math.hypot(it.x - me.x, it.z - me.z), status = youIt ? "YOU'RE IT: RAM SOMEONE!" : `RUN! ${SEAT_NAMES[it.i].toUpperCase()} HAS HIM  ${Math.round(dIt)} m`;
@@ -1002,7 +1309,7 @@ function hud() {
 }
 function touchHud() { // the thumb controls, drawn: a round directional pad on the left, buttons on the right
   const ring = (x, y, r, fill, line) => { ctx.beginPath(); ctx.arc(x, y, r, 0, 7); ctx.fillStyle = fill; ctx.fill(); ctx.lineWidth = 4; ctx.strokeStyle = line; ctx.stroke(); };
-  for (const k in BTN) { const b = BTN[k], on = touchHeld(k); ring(b.x, b.y, b.r, on ? 'rgba(255,225,74,0.9)' : 'rgba(20,12,48,0.6)', on ? PAL.ink : '#fff'); text(b.label, b.x, b.y, b.r > 40 ? 26 : 16, on ? PAL.ink : '#fff'); }
+  for (const k in btns()) { const b = btns()[k], on = touchHeld(k); ring(b.x, b.y, b.r, on ? 'rgba(255,225,74,0.9)' : 'rgba(20,12,48,0.6)', on ? PAL.ink : '#fff'); text(b.label, b.x, b.y, b.r > 40 ? 26 : 16, on ? PAL.ink : '#fff'); }
   const held = touch.steerId !== null, bx = held ? touch.x0 : PAD.x, by = held ? touch.y0 : PAD.y, R = tune.touch_pad_range;
   let kx = held ? touch.x - touch.x0 : 0, ky = held ? touch.y - touch.y0 : 0; const kd = Math.hypot(kx, ky); if (kd > R) { kx *= R / kd; ky *= R / kd; }
   ring(bx, by, R + 30, 'rgba(20,12,48,0.55)', '#fff');
@@ -1025,11 +1332,15 @@ const go = () => touch.on || touch.coarse ? 'Tap' : 'Press Enter';
 let titleT = 0;
 const CARDS = [W / 2 - 318, W / 2 - 106, W / 2 + 106, W / 2 + 318], CARD_W = 200, CARD_Y = 252, CARD_H = 172, BOTS_Y = 452;
 const moreBots = () => { CONFIG.bots.value = tune.bots >= CONFIG.bots.max ? CONFIG.bots.min : tune.bots + 1; };
-function titleTap(x, y) { // pick a rig, or change how many bots; anything else starts the shift
+const MODE_Y = 184, MODE_X = [W / 2 - 165, W / 2 + 165], MODES = [['tag', 'PATIENT TAG'], ['br', 'BATTLE ROYALE']];
+function titleTap(x, y) { // pick a mode, a rig or the number of bots; anything else starts the match
+  for (let i = 0; i < 2; i++) if (Math.abs(x - MODE_X[i]) < 155 && Math.abs(y - MODE_Y) < 24) { MODE = MODES[i][0]; tone(740, 0.08, 'square', 0.15); return true; }
   for (let i = 0; i < 4; i++) if (Math.abs(x - CARDS[i]) < CARD_W / 2 && y > CARD_Y && y < CARD_Y + CARD_H) { ME = i; tone(660, 0.08, 'square', 0.15); return true; }
   if (Math.abs(x - W / 2) < 230 && Math.abs(y - BOTS_Y) < 22) { moreBots(); tone(520, 0.08, 'square', 0.15); return true; }
   return false;
 }
+const RES_BTN = { rematch: { x: W / 2 - 170, y: 650, w: 310, h: 58, label: 'REMATCH', key: 'Enter' }, mode: { x: W / 2 + 170, y: 650, w: 310, h: 58, label: 'CHANGE MODE', key: 'Escape' } };
+function resultTap(x, y) { for (const k in RES_BTN) { const b = RES_BTN[k]; if (Math.abs(x - b.x) < b.w / 2 && Math.abs(y - b.y) < b.h / 2) hit.add(b.key); } }
 const scenes = {
   figures: { // every vehicle side by side, its name under it
     update(dt) { state.t += dt; },
@@ -1045,9 +1356,10 @@ const scenes = {
       text('Mr. Crouch, the patient: whoever carries him is IT', W / 2, H - 60, 22, PAL.it);
     },
   },
-  title: { // the rules, the rig to drive, how many bots, the controls
+  title: { // the mode, the rig to drive, how many bots, the controls
     update(dt) {
       titleT += dt;
+      if (pressed('ArrowUp') || pressed('ArrowDown') || pressed('KeyW') || pressed('KeyS') || pressed('KeyT') || pressed('Tab')) MODE = MODE === 'tag' ? 'br' : 'tag';
       if (pressed('ArrowLeft') || pressed('KeyA')) ME = (ME + 3) % 4;
       if (pressed('ArrowRight') || pressed('KeyD')) ME = (ME + 1) % 4;
       for (let i = 0; i < 4; i++) if (pressed('Digit' + (i + 1))) ME = i;
@@ -1056,13 +1368,12 @@ const scenes = {
     },
     draw() {
       ctx.clearRect(0, 0, W, H); place(1);
-      const a = titleT * 0.25, touchy = touch.on || touch.coarse;   // the first picture: the bridge over the bayou, downtown ahead
+      const a = titleT * 0.25, touchy = touch.on || touch.coarse, br = MODE === 'br';   // the first picture: the bridge over the bayou, downtown ahead
       cam.fov = 58; cam.updateProjectionMatrix(); cam.position.set(Math.sin(a) * 5, 9 + Math.sin(a * 0.7), 84 + Math.sin(a * 0.5) * 10); cam.lookAt(0, 30, 205); render();
-      shade(0.45); text(TITLE.toUpperCase(), W / 2 + 4, 78, 88, PAL.ink); text(TITLE.toUpperCase(), W / 2, 74, 88, PAL.it);
-      text(EDITION.toUpperCase(), W / 2, 138, 32, '#ff6ab0');
-      panel(W / 2 - 430, 164, 860, 66);
-      text('PATIENT TAG: whoever carries Mr. Crouch is IT. Ram a rival to hand him over.', W / 2, 184, 19, '#fff');
-      text("Don't be IT when the clock runs out. Three rounds make a shift.", W / 2, 211, 19, '#fff');
+      shade(0.45); text(TITLE.toUpperCase(), W / 2 + 4, 70, 84, PAL.ink); text(TITLE.toUpperCase(), W / 2, 66, 84, PAL.it);
+      text(EDITION.toUpperCase(), W / 2, 128, 30, '#ff6ab0');
+      MODES.forEach(([m, label], i) => { const on = MODE === m; panel(MODE_X[i] - 155, MODE_Y - 24, 310, 48, on ? 'rgba(255,225,74,0.96)' : undefined); text(label, MODE_X[i], MODE_Y + 1, 24, on ? PAL.ink : '#fff'); });
+      text(br ? 'Three minutes, blasters and ammo crates. Most rival wrecks at the buzzer wins.' : "Whoever carries Mr. Crouch is IT. Ram a rival to hand him over. Don't be IT at the buzzer.", W / 2, 230, 18, '#fff');
       RIGS.forEach((k, i) => {
         const x = CARDS[i], on = i === ME, K = KINDS[k], nb = botSeats().filter(j => j % 4 === i).length;
         panel(x - CARD_W / 2, CARD_Y, CARD_W, CARD_H, on ? 'rgba(255,225,74,0.96)' : undefined);
@@ -1071,9 +1382,9 @@ const scenes = {
         text(on ? (nb ? `YOU + ${nb} BOT` : 'YOU') : nb ? `${nb} BOT${nb > 1 ? 'S' : ''}` : 'SITS OUT', x, CARD_Y + 153, 16, on ? PAL.ink : '#d8ccff');
       });
       panel(W / 2 - 230, BOTS_Y - 20, 460, 40); text(`RIVAL BOTS: ${tune.bots}   (${touchy ? 'tap' : 'B'} to change)`, W / 2, BOTS_Y, 19, '#ffe14a');
-      panel(W / 2 - 430, 486, 860, 70); (touchy ? TOUCH_CONTROLS : CONTROLS).forEach((c, i) => text(c, W / 2, 507 + i * 28, 17, '#fff'));
-      text(touchy ? 'Tap a rig to choose it, tap here to start' : 'Left / Right to choose a rig, Enter or click here to start', W / 2, 604, 30, '#fff');
-      text('Battle Royale, Combat Racing and Campaign are planned and not built yet', W / 2, 654, 16, '#d8ccff');
+      panel(W / 2 - 430, 486, 860, 70); (touchy ? (br ? BR_TOUCH_CONTROLS : TOUCH_CONTROLS) : (br ? BR_CONTROLS : CONTROLS)).forEach((c, i) => text(c, W / 2, 507 + i * 28, 17, '#fff'));
+      text(touchy ? 'Tap a mode and a rig, then tap here to start' : 'Up / Down: mode   Left / Right: rig   Enter or click here: start', W / 2, 604, 28, '#fff');
+      text('Combat Racing and Campaign are planned and not built yet', W / 2, 654, 16, '#d8ccff');
     },
   },
   play: {
@@ -1110,6 +1421,21 @@ const scenes = {
     },
   },
 };
+scenes.brResults = { // the buzzer has gone: nothing scores any more. Rematch, or change mode.
+  update() {
+    if (pressed('Enter') || pressed('KeyR')) { reset(); scene = 'play'; }
+    else if (pressed('Escape') || pressed('KeyC')) { scene = 'title'; reset(); }
+  },
+  draw() {
+    drawPlay(); shade(0.94); const R = state.result, touchy = touch.on || touch.coarse;
+    text(R.draw ? 'DRAW' : R.leaders[0] === ME ? 'YOU WIN' : `${SEAT_NAMES[R.leaders[0]].toUpperCase()} WINS`, W / 2, 62, 62, PAL.it); text(state.gained, W / 2, 112, 22, '#fff');
+    const rh = R.rows.length > 6 ? 50 : 58, y0 = 172, cx = [W / 2 - 330, W / 2 - 250, W / 2 - 215, W / 2 + 180, W / 2 + 330];
+    text('PLACE', cx[0], y0 - 30, 16, '#ffe14a'); text('RIG', cx[2], y0 - 30, 16, '#ffe14a', 'left'); text('WRECKS', cx[3], y0 - 30, 16, '#ffe14a'); text('LOSSES', cx[4], y0 - 30, 16, '#ffe14a');
+    R.rows.forEach((r, n) => { const y = y0 + n * rh, mine = r.i === ME; panel(W / 2 - 390, y - rh / 2 + 3, 780, rh - 6, mine ? 'rgba(255,225,74,0.94)' : undefined);
+      const col = mine ? PAL.ink : '#fff'; text(String(r.place), cx[0], y, 28, col); icon(RIGS[r.i % 4], cx[1], y, 11, false); text(who(r.i), cx[2], y, 24, col, 'left'); text(String(r.kills), cx[3], y, 30, col); text(String(r.deaths), cx[4], y, 30, col); });
+    for (const k in RES_BTN) { const b = RES_BTN[k]; panel(b.x - b.w / 2, b.y - b.h / 2, b.w, b.h, k === 'rematch' ? 'rgba(255,225,74,0.96)' : 'rgba(20,12,48,0.92)'); ctx.strokeStyle = '#fff'; ctx.lineWidth = 3; ctx.strokeRect(b.x - b.w / 2, b.y - b.h / 2, b.w, b.h); text(b.label, b.x, b.y - (touchy ? 0 : 8), 26, k === 'rematch' ? PAL.ink : '#fff'); if (!touchy) text(k === 'rematch' ? 'Enter' : 'Esc', b.x, b.y + 17, 14, k === 'rematch' ? PAL.ink : '#d8ccff'); }
+  },
+};
 
 // ---- Loop: fixed step, frame time clamped ---------------------------------------------
 function step() {
@@ -1135,6 +1461,7 @@ window.game = {
   get scene() { return scene; },
   get state() { return state; },
   get me() { return ME; }, set me(i) { ME = i; },
+  get mode() { return MODE; }, set mode(m) { MODE = m; },
   get sounds() { return { ...sounds, context: audio ? audio.ac.state : 'not started' }; },
   press(code) { hit.add(code); },
   hold(code, on) { on ? down.add(code) : down.delete(code); },
