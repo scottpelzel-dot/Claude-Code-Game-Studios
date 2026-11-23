@@ -8,6 +8,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Crash Out: Houston Edition</title>
 <style>
+  html { box-sizing: border-box; }
   html, body { margin: 0; height: 100%; background: #000; overflow: hidden; touch-action: none; user-select: none; -webkit-user-select: none; }
   body { font-variant-numeric: tabular-nums; }
   #wrap { position: relative; margin: 0 auto; }
@@ -56,13 +57,22 @@ const renderer = new THREE.WebGLRenderer({ canvas: document.getElementById('gl')
 renderer.shadowMap.enabled = !CHEAP; renderer.shadowMap.type = THREE.PCFSoftShadowMap;
 let viewW = W; // the game's width on screen, in CSS pixels: a narrow one gets the phone HUD
 function fit() { // fills the window at any size and pixel ratio
-  const s = Math.min(innerWidth / W, innerHeight / H);
+  // The room actually on offer: the visible window, less any padding the host page keeps clear for
+  // its own bars (a phone's safe areas, an app's close and share buttons).
+  let availW = innerWidth, availH = innerHeight;
+  if (typeof getComputedStyle === 'function') {
+    const vv = window.visualViewport, root = getComputedStyle(document.documentElement), body = getComputedStyle(document.body), px = (st, k) => parseFloat(st[k]) || 0;
+    if (vv) { availW = Math.min(availW, vv.width); availH = Math.min(availH, vv.height); }
+    availW -= px(root, 'paddingLeft') + px(root, 'paddingRight') + px(body, 'paddingLeft') + px(body, 'paddingRight');
+    availH -= px(root, 'paddingTop') + px(root, 'paddingBottom') + px(body, 'paddingTop') + px(body, 'paddingBottom');
+  }
+  const s = Math.max(0.1, Math.min(availW / W, availH / H));
   const r = s * (devicePixelRatio || 1);
   canvas.width = Math.round(W * r); canvas.height = Math.round(H * r);
   const cw = Math.round(W * s), ch = Math.round(H * s); viewW = cw;
   canvas.style.width = cw + 'px'; canvas.style.height = ch + 'px';
   wrap.style.width = cw + 'px'; wrap.style.height = ch + 'px';
-  wrap.style.marginTop = Math.max(0, Math.floor((innerHeight - ch) / 2)) + 'px';
+  wrap.style.marginTop = Math.max(0, Math.floor((availH - ch) / 2)) + 'px';
   ctx.setTransform(r, 0, 0, r, 0, 0);
   renderer.setPixelRatio(CHEAP ? 0.5 : Math.min(devicePixelRatio || 1, 2));
   renderer.setSize(cw, ch, true);
@@ -1712,7 +1722,8 @@ window.game = {
   },
 };
 
-addEventListener('resize', fit); fit();
+addEventListener('resize', fit); addEventListener('orientationchange', () => setTimeout(fit, 250)); if (window.visualViewport) window.visualViewport.addEventListener('resize', fit);
+fit(); setTimeout(fit, 400);   // again once the host page has settled its bars
 reset();
 scene = params.get('scene') || 'title';
 if (params.get('room') && typeof WebSocket !== 'undefined') netJoin(params.get('room'));   // an invite link: straight into that room
