@@ -12,10 +12,15 @@
   body { font-variant-numeric: tabular-nums; }
   #wrap { position: relative; margin: 0 auto; }
   canvas { display: block; position: absolute; left: 0; top: 0; }
+  #wrap input { position: absolute; box-sizing: border-box; display: none; text-align: center; font: 700 18px Arial, sans-serif; border: 3px solid #ffe14a; border-radius: 6px;
+    background: #1a1a6e; color: #fff; user-select: text; -webkit-user-select: text; touch-action: auto; }
+  #invite { left: 20%; top: 27.2%; width: 52%; height: 6.6%; }
+  #roomcode { left: 37%; top: 43%; width: 26%; height: 13%; text-transform: uppercase; letter-spacing: 0.2em; }
 </style>
 </head>
 <body>
-<div id="wrap"><canvas id="gl"></canvas><canvas id="game"></canvas></div>
+<div id="wrap"><canvas id="gl"></canvas><canvas id="game"></canvas>
+<input id="invite" readonly aria-label="Invite link"><input id="roomcode" maxlength="4" autocapitalize="characters" autocomplete="off" spellcheck="false" aria-label="Room code"></div>
 <script src="vendor/three.js"></script>
 <script src="config.js"></script>
 <script>
@@ -61,6 +66,7 @@ function fit() { // fills the window at any size and pixel ratio
   ctx.setTransform(r, 0, 0, r, 0, 0);
   renderer.setPixelRatio(CHEAP ? 0.5 : Math.min(devicePixelRatio || 1, 2));
   renderer.setSize(cw, ch, true);
+  document.getElementById('invite').style.fontSize = 17 * s + 'px'; document.getElementById('roomcode').style.fontSize = 52 * s + 'px';
 }
 function text(s, x, y, size, c, align = 'center') {
   ctx.fillStyle = c; ctx.font = `${size}px ${FONT}`; ctx.textAlign = align;
@@ -77,14 +83,16 @@ const pressed = code => hit.has(code); // true for one step after the key goes d
 addEventListener('keydown', e => {
   startAudio(); touch.on = false;
   if (!e.repeat) { down.add(e.code); hit.add(e.code); }
-  if (e.code === 'Space' || e.code.startsWith('Arrow')) e.preventDefault();
+  if ((e.code === 'Space' || e.code.startsWith('Arrow')) && !(e.target && e.target.tagName === 'INPUT')) e.preventDefault();
 });
 addEventListener('keyup', e => down.delete(e.code));
 addEventListener('pointerdown', e => { // a click or a tap works wherever Enter does; on the title it can pick a rig first
   startAudio();
   if (scene === 'title' && titleTap(...toLogical(e))) return;
   if (scene === 'brResults') { resultTap(...toLogical(e)); return; }
-  if (scene === 'title' || scene === 'between' || scene === 'over' || scene === 'results' || scene === 'pause') hit.add('Enter');
+  if (scene === 'lobby') { lobbyTap(...toLogical(e)); return; }
+  if (scene === 'join') { if (e.target && e.target.id === 'roomcode') return; joinTap(...toLogical(e)); return; }
+  if (scene === 'between' || scene === 'over' || scene === 'results' || scene === 'pause') hit.add('Enter');
 });
 addEventListener('blur', () => down.clear());
 
@@ -112,7 +120,7 @@ addEventListener('pointerdown', e => {
 });
 addEventListener('pointermove', e => { if (e.pointerId === touch.steerId) [touch.x, touch.y] = toLogical(e); });
 for (const type of ['pointerup', 'pointercancel']) addEventListener(type, e => { if (e.pointerId === touch.steerId) touch.steerId = null; touch.held.delete(e.pointerId); });
-addEventListener('touchmove', e => e.preventDefault(), { passive: false }); // no scrolling or pull-to-refresh under the thumbs
+addEventListener('touchmove', e => { if (!(e.target && e.target.tagName === 'INPUT')) e.preventDefault(); }, { passive: false }); // no scrolling or pull-to-refresh under the thumbs
 
 // ---- Audio: started on first input, mute on M --------------------------------------------
 let audio = null, muted = false, snd = null;
@@ -490,6 +498,7 @@ const puffs = [];
 for (let i = 0; i < 96; i++) { const m = new THREE.Mesh(unitBox, new THREE.MeshBasicMaterial({ color: 0xffc9a0, transparent: true, opacity: 0, depthWrite: false })); m.visible = false; scene3.add(m); puffs.push({ m, life: 0 }); }
 let puffI = 0;
 function puff(x, y, z, vx, vy, vz, size, life, color) {
+  if (REPLAY) return;
   const p = puffs[puffI = (puffI + 1) % puffs.length];
   Object.assign(p, { x, y, z, vx, vy, vz, size, life, max: life }); p.m.material.color.set(color); p.m.visible = true;
 }
@@ -530,7 +539,7 @@ function routeStep(from, to) { // breadth-first over the street grid: the next j
 }
 const stat = (v, k) => v.kind === 'civ' ? ({ top: tune.civ_speed * 1.6, accel: 9, turn: 1, mass: tune.civ_mass })[k] : tune[KINDS[v.kind].stat + '_' + k];
 const rigs = () => state.vehicles.slice(0, NR).filter(v => v.active);
-const who = i => SEAT_NAMES[i] + (i === ME ? ' (you)' : ' (bot)');
+const who = i => SEAT_NAMES[i] + (i === ME && !(NET && NET.host) ? ' (you)' : NET && NET.humans && NET.humans.includes(i) ? ` (P${(NET.pnum && NET.pnum[i]) || '?'})` : ' (bot)');
 const botSeats = () => [0, 1, 2, 3, 4, 5, 6, 7].filter(i => i !== ME).slice(0, tune.bots);
 
 // ---- Drivers -------------------------------------------------------------------------------
@@ -597,7 +606,7 @@ function tagBrain(v) {
       if (o === v) continue;
       let d = Math.hypot(o.x - v.x, o.z - v.z) + (o.immune > 0 ? 40 + o.immune * 30 : 0);
       if (o === leader) d -= tune.bot_leader_bias * (r >= 3 ? 1 : 0.4);
-      if (o.i === ME) d -= tune.bot_player_bias;
+      if (liveHuman(o.i)) d -= tune.bot_player_bias;
       if (o === b.prey) d -= 12;                                          // stay on a target rather than dithering between two
       if (d < bestD) { bestD = d; best = o; }
     }
@@ -848,13 +857,13 @@ function startBattle() { // Battle Royale: everyone starts armed and healthy, no
 }
 function startRound(n) {
   state.round = n; state.phase = 'countdown'; state.count = tune.countdown; state.clock = tune.round_time; state.lastTick = 9;
-  const s = STARTS[(n - 1) % STARTS.length], roles = [ME, ...botSeats()]; state.roles = roles;
+  const s = STARTS[(n - 1) % STARTS.length], roles = NET && NET.roles ? NET.roles : [ME, ...botSeats()]; state.roles = roles;   // in a room, the server names the seats
   state.vehicles.forEach((v, i) => {
     Object.assign(v, { vx: 0, vz: 0, spin: 0, stall: 0, immune: 0, drift: false, grip: tune.grip, clean: 0, bot: freshBot(), layer: null, y: 0, pitch: 0 });
     if (i < NR) { v.active = roles.includes(i); if (v.active) [v.x, v.z, v.h] = s.at[roles.indexOf(i)]; else { v.x = 900; v.z = 900 + i * 12; } v.px = v.x; v.pz = v.z; v.ph = v.h; }
   });
   placeCivs(); state.shots = []; state.pickups = []; state.feed = [];
-  state.it = roles[s.it]; state.fly = 0; state.camLow = 0; state.camYaw = state.camPrev = state.vehicles[ME].h;
+  state.it = roles[s.it % roles.length]; state.fly = 0; state.camLow = 0; state.camYaw = state.camPrev = state.vehicles[ME].h;
   say([LINES.start[s.it === 0 ? 2 : (n - 1) % 2]], state.vehicles[state.it]);
 }
 
@@ -918,6 +927,7 @@ function hitWorld(v) {
   if (worst > 7 && v.i < NR) crash(v, worst, v.i === ME ? 1 : 0.4);
 }
 function crash(v, speed, loud) {
+  if (REPLAY) return;
   const power = clamp(speed / 28, 0, 1), me = state.vehicles[ME], near = clamp(1 - Math.hypot(v.x - me.x, v.z - me.z) / 90, 0, 1);
   if (near <= 0) return;
   crunch(power * loud * near); state.shake = Math.max(state.shake, power * loud * near * 0.9);
@@ -961,6 +971,7 @@ function tag(from, to) { // the ram is the hand-off: once, then a grace before h
   state.fly = 0.55; state.flyFrom = [from.x, from.y + meshes[from.i].userData.roof, from.z];
   state.flash = 0.35; state.shake = Math.max(state.shake, 0.8); state.gripeT = 2.5;
   events.push({ t: state.t, tag: [from.i, to.i] });
+  if (NET && NET.host) { NET.tagLog.push([++NET.tagN, from.i, to.i]); if (NET.tagLog.length > 8) NET.tagLog.shift(); }
   if (to.i === ME) { say(LINES.gotHim); tone(520, 0.45, 'sawtooth', 0.3, 130); }
   else if (from.i === ME) { say(LINES.gaveHim, to); tone(440, 0.12, 'square', 0.25); tone(660, 0.12, 'square', 0.25, 990); }
   else say(LINES.other, to);
@@ -1063,6 +1074,17 @@ function resetOnRoad(v) { // back on the nearest street, facing along it
   v.vx = v.vz = v.spin = 0; v.stall = tune.reset_stall; v.px = v.x; v.pz = v.z; v.ph = v.h;
 }
 
+function layerOf(v) { // on the bridge or down on the bank: decided as a rig enters the bayou, kept until it leaves
+  if (!(v.z > CH.z0 && v.z < CH.z1)) v.layer = null; else if (!v.layer) v.layer = Math.abs(v.x) < CH.bridgeW ? 'deck' : 'low';
+}
+function groundAll() { // the ground under each rig: flat on the streets and the bridge, sloping down the banks
+  for (const v of state.vehicles) {
+    if (!v.active) continue;
+    const half = KINDS[v.kind].len * 0.32, fz = Math.cos(v.h), low = v.layer === 'low' || (!v.layer && Math.abs(v.x) >= CH.bridgeW);   // lined up with the bridge, a rig stays level
+    const yf = low ? bankY(v.z + fz * half) : 0, yb = low ? bankY(v.z - fz * half) : 0;
+    v.y = (yf + yb) / 2; v.pitch = Math.atan2(yb - yf, half * 2);
+  }
+}
 function playStep(dt) {
   state.t += dt;
   const vs = state.vehicles, br = MODE === 'br';
@@ -1077,16 +1099,13 @@ function playStep(dt) {
     if (beep < state.lastTick && state.count > 0) { state.lastTick = beep; tone(440, 0.12, 'square', 0.2); }
     if (state.count <= 0) { state.phase = 'run'; tone(880, 0.35, 'square', 0.25); }
   } else {
-    if (pressed('KeyR') && vs[ME].active) resetOnRoad(vs[ME]);
-    for (const v of vs) { if (!v.active) continue; v.inp = v.i === ME ? humanDriver() : v.i < NR ? botDriver(v) : civDriver(v); }
+    if (pressed('KeyR') && vs[ME].active && !NET) resetOnRoad(vs[ME]);
+    for (const v of vs) { if (!v.active) continue; v.inp = v.i >= NR ? civDriver(v) : NET && NET.host ? hostDriver(v) : v.i === ME ? humanDriver() : botDriver(v); }
     for (const v of vs) if (v.active) drive(v, dt);
     if (br) for (const v of rigs()) { if (v.cool > 0) v.cool -= dt; if (v.shield > 0) v.shield -= dt; if (v.hurt > 0) v.hurt -= dt; if (v.inp.fire) fire(v); }
     hitVehicles();
     for (const v of vs) if (v.active) hitWorld(v);
-    for (const v of vs) { // on the bridge or down on the bank: decided as a rig enters the bayou, kept until it leaves
-      if (!v.active) continue;
-      if (!(v.z > CH.z0 && v.z < CH.z1)) v.layer = null; else if (!v.layer) v.layer = Math.abs(v.x) < CH.bridgeW ? 'deck' : 'low';
-    }
+    for (const v of vs) if (v.active) layerOf(v);
     if (br) battleStep(dt);
     else {
       for (const v of rigs()) if (v.i !== state.it) v.clean += dt;
@@ -1097,12 +1116,7 @@ function playStep(dt) {
       if (state.clock <= 0) endRound();
     }
   }
-  for (const v of vs) { // the ground under each rig: flat on the streets and the bridge, sloping down the banks
-    if (!v.active) continue;
-    const half = KINDS[v.kind].len * 0.32, fz = Math.cos(v.h), low = v.layer === 'low' || (!v.layer && Math.abs(v.x) >= CH.bridgeW);   // lined up with the bridge, a rig stays level
-    const yf = low ? bankY(v.z + fz * half) : 0, yb = low ? bankY(v.z - fz * half) : 0;
-    v.y = (yf + yb) / 2; v.pitch = Math.atan2(yb - yf, half * 2);
-  }
+  groundAll();
   const p = vs[ME];                                          // the view swings round behind you, and drops low under the bridge
   state.camYaw += wrapA(p.h - state.camYaw) * Math.min(1, tune.cam_turn * dt);
   state.camLow += ((p.layer === 'low' && Math.abs(p.x) < CH.bridgeW + 16 ? 1 : 0) - state.camLow) * Math.min(1, 5 * dt);
@@ -1110,7 +1124,7 @@ function playStep(dt) {
 }
 function endRound() {
   const vs = state.vehicles; state.clock = 0;
-  if (state.it === ME) { // stuck with him at the buzzer: this round again, not the shift
+  if (liveHuman(state.it)) { // a person stuck with him at the buzzer: this round again, for everyone, not the shift
     state.gained = 'Round ' + state.round + ' lost: Mr. Crouch is still aboard your rig'; scene = 'over'; tone(300, 0.6, 'sawtooth', 0.3, 80); return;
   }
   for (let i = 0; i < NR; i++) if (vs[i].active) state.totals[i] += vs[i].clean;
@@ -1129,7 +1143,8 @@ function place(alpha) { // meshes follow the simulation, between the last two st
   const br = MODE === 'br';
   for (const v of state.vehicles) {
     const m = meshes[v.i]; m.visible = v.active; if (!v.active) continue;
-    const x = lerp(v.px, v.x, alpha), z = lerp(v.pz, v.z, alpha), h = v.ph + wrapA(v.h - v.ph) * alpha;
+    let x = lerp(v.px, v.x, alpha), z = lerp(v.pz, v.z, alpha), h = v.ph + wrapA(v.h - v.ph) * alpha;
+    if (NET && NET.client && v.i === ME) { x += net.ex; z += net.ez; h += net.eh; }   // a server correction to your own rig is eased in, never snapped
     const side = (v.vx * Math.cos(v.h) - v.vz * Math.sin(v.h));
     m.position.set(x, v.y, z); m.rotation.set(v.pitch * Math.cos(v.h), h, clamp(side * 0.02, -0.16, 0.16));   // a little body roll in a slide
     m.scale.setScalar(br && v.hurt > 0 ? 1 + v.hurt * 0.5 : 1);                                              // a hit makes the rig jolt
@@ -1305,6 +1320,7 @@ function hud() {
   }
   if (touch.on) touchHud();
   if (state.phase === 'countdown') { const n = Math.ceil(state.count * 3 / Math.max(tune.countdown, 0.01)); panel(W / 2 - 90, H / 2 - 110, 180, 120); text(String(clamp(n, 1, 3)), W / 2, H / 2 - 50, 96, PAL.it); }
+  if (NET && NET.client) netHud(PH);
   if (state.flash > 0) { ctx.fillStyle = `rgba(255,225,74,${state.flash * 1.2})`; ctx.fillRect(0, 0, W, H); }
 }
 function touchHud() { // the thumb controls, drawn: a round directional pad on the left, buttons on the right
@@ -1329,6 +1345,151 @@ function boardLines(y) { // the scoreboard on the between-round and results scre
 function star(x, y, r, on) { ctx.beginPath(); for (let i = 0; i < 10; i++) { const a = -Math.PI / 2 + i * Math.PI / 5, q = i % 2 ? r * 0.45 : r; ctx.lineTo(x + Math.cos(a) * q, y + Math.sin(a) * q); } ctx.closePath(); ctx.fillStyle = on ? PAL.it : 'rgba(255,255,255,0.18)'; ctx.fill(); ctx.strokeStyle = PAL.ink; ctx.lineWidth = 3; ctx.stroke(); }
 const go = () => touch.on || touch.coarse ? 'Tap' : 'Press Enter';
 
+// =========================================================================================
+// MULTIPLAYER: private rooms. A server runs this same file's rules for the room (NET.host, see
+// server.js). Each browser in the room (NET.client) sends its driving, predicts its own rig so
+// the steering answers at once, and eases every other vehicle towards what the server reports.
+// =========================================================================================
+let NET = null, REPLAY = false;
+const net = { ws: null, status: 'off', code: '', players: [], you: null, bots: 3, phase: 'lobby', shift: -1, seq: 0, pending: [], lastTag: 0, err: '', held: {}, lan: [], ex: 0, ez: 0, eh: 0, left: true, pingT: 0, copied: 0, retry: 0, lastSnap: 0 };
+const humanSeat = i => NET && NET.humans ? NET.humans.includes(i) : i === ME;
+const liveHuman = i => humanSeat(i) && !(NET && NET.away && NET.away[i] === 'bot');   // a person driving, not a seat a bot is keeping warm
+function hostDriver(v) { // on the server: a person's seat takes that person's last input; a dropped one brakes, then a bot covers
+  if (!NET.humans.includes(v.i)) return botDriver(v);
+  if (NET.away[v.i] === 'bot') return botDriver(v);
+  if (NET.away[v.i]) return { throttle: 0, steer: 0, hand: true, fire: false };
+  return NET.inputs[v.i] || { throttle: 0, steer: 0, hand: false, fire: false };
+}
+const netToken = code => { try { return localStorage.getItem('crashout:' + code) || ''; } catch (e) { return ''; } };
+const netLink = () => ((/^(localhost|127\.|\[::1\])/.test(location.hostname) && net.lan[0]) ? net.lan[0] : location.origin) + '/?room=' + net.code;   // a link another device can open
+function netSend(o) { if (net.ws && net.ws.readyState === 1) net.ws.send(JSON.stringify(o)); }
+function netOpen(first) {
+  if (!/^http/.test(location.protocol) || typeof WebSocket === 'undefined') { net.err = 'Multiplayer needs the game server: run server.js and open the address it prints.'; return; }
+  net.left = false; if (net.status !== 'lost') net.status = 'connecting'; let opened = false;
+  const ws = new WebSocket((location.protocol === 'https:' ? 'wss://' : 'ws://') + location.host + '/ws'); net.ws = ws;
+  ws.onopen = () => { opened = true; ws.send(JSON.stringify(first)); };
+  ws.onmessage = e => { let m; try { m = JSON.parse(e.data); } catch (x) { return; } netMsg(m); };
+  ws.onclose = () => {
+    if (net.ws !== ws) return; net.ws = null;
+    if (net.left) { net.status = 'off'; return; }
+    if (!net.code) { net.status = 'off'; net.err = opened ? 'The server closed the connection.' : 'No game server answered at this address.'; if (scene === 'join' || scene === 'lobby') scene = 'title'; return; }
+    net.status = 'lost'; net.retry = 1;                      // in a room: keep trying to get back to the seat
+  };
+}
+function netCreate() { net.err = ''; net.code = ''; netOpen({ t: 'create' }); }
+function netJoin(code) { code = String(code || '').toUpperCase().replace(/[^A-Z0-9]/g, '').slice(0, 4); if (code.length < 4) { net.err = 'A room code has four characters.'; return; } net.err = ''; net.code = ''; netOpen({ t: 'join', room: code, token: netToken(code) }); }
+function netLeave() { net.left = true; netSend({ t: 'leave' }); if (net.ws) net.ws.close(); net.code = ''; net.status = 'off'; net.players = []; if (NET) { NET = null; ME = ME % 4; reset(); } scene = 'title'; }
+function netMsg(m) {
+  if (m.t === 'room') {
+    net.code = m.code; net.players = m.players; net.you = m.players.find(p => p.id === m.you) || null; net.bots = m.bots; net.phase = m.phase; net.lan = m.lan || []; net.status = 'on'; net.err = '';
+    if (m.token) { try { localStorage.setItem('crashout:' + m.code, m.token); } catch (e) { /* no storage: a reload cannot reclaim the seat */ } }
+    document.getElementById('invite').value = netLink();
+    if (m.phase !== 'lobby' && net.you && net.you.seat >= 0) { // a shift is on and you have a seat in it: get in, or back in
+      const humans = m.players.filter(p => p.seat >= 0).map(p => p.seat), pnum = {}; m.players.forEach(p => { if (p.seat >= 0) pnum[p.seat] = p.num; });
+      if (!NET || net.shift !== m.shift || scene === 'lobby' || scene === 'title' || scene === 'join') {
+        ME = net.you.seat; MODE = 'tag'; NET = { client: true, humans, roles: m.roles, pnum }; net.shift = m.shift; net.lastTag = 0; net.pending = []; net.ex = net.ez = net.eh = 0; reset(); scene = 'play';
+      } else { NET.humans = humans; NET.pnum = pnum; }
+    } else { if (NET) { NET = null; ME = ME % 4; reset(); } scene = 'lobby'; }
+  } else if (m.t === 'snap') applySnap(m);
+  else if (m.t === 'err') { net.err = m.msg; if (m.fatal) { net.left = true; net.code = ''; if (net.ws) net.ws.close(); if (NET) { NET = null; ME = ME % 4; reset(); } scene = 'title'; } }
+}
+function applySnap(m) { // what the server says is so
+  if (!NET || !NET.client || m.sh !== net.shift) return;
+  net.lastSnap = state.t; net.held = m.held || {};
+  if (m.sc !== scene) { if (m.sc === 'play') { net.pending = []; say([m.it === ME ? LINES.start[2] : LINES.start[(m.r - 1) % 2]], state.vehicles[m.it]); } scene = m.sc; }
+  if (state.phase === 'countdown' && m.ph === 'run') tone(880, 0.35, 'square', 0.25);
+  state.round = m.r; state.phase = m.ph; state.count = m.ct; state.clock = m.ck; state.totals = m.tot; state.netWait = m.w;
+  for (const [n, f, t] of m.ev) if (n > net.lastTag) { net.lastTag = n; tag(state.vehicles[f], state.vehicles[t]); }   // each handoff happens once, when the server says so
+  state.it = m.it;
+  if (scene === 'results') { const share = state.totals[ME] / (tune.rounds * tune.round_time); state.stars = clamp(2 + Math.floor((share - tune.star_base) / tune.star_step), 1, 5); state.score = Math.floor(state.totals[ME]); }
+  else state.score = Math.floor(state.totals[ME] + state.vehicles[ME].clean);
+  const seen = new Set();
+  for (const a of m.v) {
+    const v = state.vehicles[a[0]]; if (!v) continue; seen.add(a[0]);
+    const S = { x: a[1], z: a[2], h: a[3], vx: a[4], vz: a[5], layer: a[6] === 1 ? 'deck' : a[6] === 2 ? 'low' : null, stall: a[7], immune: a[8], clean: a[9], spin: a[10], tags: a[11], grip: a[12] };
+    if (a[0] === ME && v.active) { netReconcile(v, S, (m.ack && m.ack[ME]) || 0); continue; }
+    const jump = !v.active || Math.hypot(S.x - v.x, S.z - v.z) > 25; v.active = true;
+    Object.assign(v, { vx: S.vx, vz: S.vz, layer: S.layer, stall: S.stall, immune: S.immune, clean: S.clean, spin: S.spin, tags: S.tags }); v.net = S;
+    if (jump) { v.x = v.px = S.x; v.z = v.pz = S.z; v.h = v.ph = S.h; if (a[0] === ME) { state.camYaw = state.camPrev = S.h; net.ex = net.ez = net.eh = 0; net.pending = []; } }
+  }
+  state.vehicles.forEach(v => { if (!seen.has(v.i)) v.active = false; });
+}
+function netReconcile(v, S, ack) { // your own rig: take the server's word for where it was, then re-drive the inputs it has not seen yet
+  const ox = v.x, oz = v.z, oh = v.h;
+  if (Math.hypot(S.x - v.x, S.z - v.z) > 25) { Object.assign(v, S); v.px = v.x; v.pz = v.z; v.ph = v.h; state.camYaw = state.camPrev = v.h; net.pending = []; net.ex = net.ez = net.eh = 0; return; }   // a new round put you somewhere else
+  Object.assign(v, { x: S.x, z: S.z, h: S.h, vx: S.vx, vz: S.vz, layer: S.layer, stall: S.stall, spin: S.spin, grip: S.grip, clean: S.clean, tags: S.tags });
+  net.pending = net.pending.filter(p => p.s > ack);
+  if (scene === 'play' && state.phase === 'run') { REPLAY = true; for (const p of net.pending) { v.inp = p.inp; drive(v, STEP); hitWorld(v); layerOf(v); } REPLAY = false; }
+  v.immune = S.immune;
+  net.ex += ox - v.x; net.ez += oz - v.z; net.eh += wrapA(oh - v.h);          // keep drawing where you were, and ease across
+  if (Math.hypot(net.ex, net.ez) > 10) net.ex = net.ez = net.eh = 0;
+}
+function netClientStep() { // a browser in a room: send the driving, predict your own rig, ease the others, draw
+  const dt = STEP, vs = state.vehicles, me = vs[ME];
+  if (scene === 'results' || scene === 'between' || scene === 'over') { if (scene === 'results' && pressed('Enter')) netSend({ t: 'ready' }); }
+  if (pressed('Escape') && scene === 'results') { netLeave(); return; }
+  state.t += dt;
+  for (const v of vs) { v.px = v.x; v.pz = v.z; v.ph = v.h; }
+  state.camPrev = state.camYaw;
+  if (state.msgT > 0) state.msgT -= dt;
+  state.shake *= Math.exp(-6 * dt); if (state.flash > 0) state.flash -= dt; if (state.fly > 0) state.fly -= dt;
+  const running = scene === 'play' && state.phase === 'run';
+  if (running) {
+    const inp = humanDriver(); inp.fire = false;
+    const msg = { t: 'in', s: ++net.seq, th: +inp.throttle.toFixed(2), st: +inp.steer.toFixed(2), h: inp.hand ? 1 : 0 }; if (pressed('KeyR')) msg.r = 1;
+    netSend(msg); net.pending.push({ s: net.seq, inp }); if (net.pending.length > 240) net.pending.shift();
+    if (me.active && net.status === 'on') { me.inp = inp; drive(me, dt); hitWorld(me); layerOf(me); }
+    state.clock = Math.max(0, state.clock - dt);
+    if (state.it === ME) { state.gripeT -= dt; if (state.gripeT <= 0) { state.gripeT = 4.2; state.gripe = (state.gripe + 1) % LINES.gripes.length; } }
+  } else if (scene === 'play' && state.phase === 'countdown') state.count -= dt;
+  else if (state.netWait > 0) state.netWait -= dt;
+  const k = Math.min(1, 14 * dt);
+  for (const v of vs) { // everyone else: carry on along their last reported heading, and close the gap to their last reported place
+    if (!v.active || v.i === ME || !v.net) continue; const S = v.net;
+    if (running) { S.x += S.vx * dt; S.z += S.vz * dt; }
+    v.x += (S.x - v.x) * k; v.z += (S.z - v.z) * k; v.h += wrapA(S.h - v.h) * k;
+    if (v.stall > 0) v.stall -= dt; if (v.immune > 0) v.immune -= dt;
+  }
+  const e = Math.exp(-9 * dt); net.ex *= e; net.ez *= e; net.eh *= e;
+  groundAll();
+  state.camYaw += wrapA(me.h - state.camYaw) * Math.min(1, tune.cam_turn * dt);
+  state.camLow += ((me.layer === 'low' && Math.abs(me.x) < CH.bridgeW + 16 ? 1 : 0) - state.camLow) * Math.min(1, 5 * dt);
+  for (const q of puffs) if (q.life > 0) { q.life -= dt; q.x += q.vx * dt; q.y += q.vy * dt; q.z += q.vz * dt; q.vy -= (q.size < 0.5 ? 18 : 0) * dt; }
+}
+function netHousekeep() { // every step, in or out of a match: keep the line alive, get back in after a drop, show the right text boxes
+  titleT += 0;
+  document.getElementById('invite').style.display = scene === 'lobby' ? 'block' : 'none';
+  document.getElementById('roomcode').style.display = scene === 'join' ? 'block' : 'none';
+  if (net.copied > 0) net.copied -= STEP;
+  if (net.status === 'on') { net.pingT -= STEP; if (net.pingT <= 0) { net.pingT = 1; netSend({ t: 'ping' }); } }
+  if (net.status === 'lost') { net.retry -= STEP; if (net.retry <= 0) { net.retry = 1.5; if (!net.ws) netOpen({ t: 'join', room: net.code, token: netToken(net.code) }); } }
+}
+addEventListener('visibilitychange', () => { if (typeof document !== 'undefined' && document.visibilityState === 'visible' && net.code && !net.left) { if (!net.ws || net.ws.readyState > 1) { net.ws = null; net.status = 'lost'; net.retry = 0; } } });   // a phone waking up: get straight back in
+function netHud(PH) { // who the other people are, and who has dropped
+  for (const p of net.players) {
+    if (p.seat < 0 || p.seat === ME) continue; const v = state.vehicles[p.seat]; if (!v.active) continue;
+    const s = toScreen(v.x, v.y + 5.2, v.z); if (s.behind || s.x < 30 || s.x > W - 30 || s.y < 30) continue;
+    const w = PH ? 74 : 52, h = PH ? 36 : 26; panel(s.x - w / 2, s.y - h / 2, w, h, p.on ? 'rgba(125,240,255,0.95)' : 'rgba(160,160,170,0.9)'); text('P' + p.num, s.x, s.y + 1, PH ? 26 : 19, PAL.ink);
+  }
+  let y = PH ? 220 : 142;
+  for (const p of net.players) if (p.seat >= 0 && !p.on && p.seat !== ME) { const left = net.held[p.seat] || 0; panel(W / 2 - 330, y, 660, 36, 'rgba(160,20,60,0.92)'); text(left > 0 ? `P${p.num} lost connection: seat held for ${Math.ceil(left)} s` : `P${p.num} is away: a bot is driving ${SEAT_NAMES[p.seat]}`, W / 2, y + 19, 20, '#fff'); y += 42; }
+  if (net.status !== 'on') { shade(0.55); panel(W / 2 - 360, H / 2 - 70, 720, 140, 'rgba(160,20,60,0.95)'); text('CONNECTION LOST', W / 2, H / 2 - 22, 46, '#fff'); text('Reconnecting: your seat is being held', W / 2, H / 2 + 34, 24, '#ffe14a'); }
+}
+const LOBBY = { copy: { x: 1014, y: 220, w: 190, h: 48 }, cardY: 372, cardH: 148, botsY: 548, start: { x: W / 2, y: 614, w: 420, h: 62 } };
+function lobbyTap(x, y) {
+  const inBox = b => Math.abs(x - b.x) < b.w / 2 && Math.abs(y - b.y) < b.h / 2;
+  if (inBox(LOBBY.copy)) { copyInvite(); return; }
+  for (let i = 0; i < 4; i++) if (Math.abs(x - CARDS[i]) < CARD_W / 2 && y > LOBBY.cardY && y < LOBBY.cardY + LOBBY.cardH) { netSend({ t: 'rig', kind: i }); tone(660, 0.08, 'square', 0.15); return; }
+  if (net.you && net.you.host && Math.abs(x - W / 2) < 230 && Math.abs(y - LOBBY.botsY) < 22) { netSend({ t: 'bots', n: net.bots >= 6 ? 0 : net.bots + 1 }); return; }
+  if (net.you && net.you.host && inBox(LOBBY.start)) hit.add('Enter');
+}
+function copyInvite() { // the link is also in the box, to select by hand where copying is refused
+  const el = document.getElementById('invite'), done = () => { net.copied = 2; };
+  try { navigator.clipboard.writeText(netLink()).then(done, () => { el.focus(); el.select(); }); } catch (e) { el.focus(); el.select(); }
+}
+const JOIN_BTN = { go: { x: W / 2 - 150, y: 470, w: 260, h: 58 }, back: { x: W / 2 + 150, y: 470, w: 260, h: 58 } };
+function joinTap(x, y) { for (const k in JOIN_BTN) { const b = JOIN_BTN[k]; if (Math.abs(x - b.x) < b.w / 2 && Math.abs(y - b.y) < b.h / 2) hit.add(k === 'go' ? 'Enter' : 'Escape'); } }
+const TITLE_BTN = { solo: { x: W / 2 - 290, y: 612, w: 272, h: 56, label: 'SOLO PLAY', key: 'Enter' }, create: { x: W / 2, y: 612, w: 272, h: 56, label: 'CREATE ROOM', key: 'C' }, join: { x: W / 2 + 290, y: 612, w: 272, h: 56, label: 'JOIN ROOM', key: 'J' } };
 let titleT = 0;
 const CARDS = [W / 2 - 318, W / 2 - 106, W / 2 + 106, W / 2 + 318], CARD_W = 200, CARD_Y = 252, CARD_H = 172, BOTS_Y = 452;
 const moreBots = () => { CONFIG.bots.value = tune.bots >= CONFIG.bots.max ? CONFIG.bots.min : tune.bots + 1; };
@@ -1337,7 +1498,8 @@ function titleTap(x, y) { // pick a mode, a rig or the number of bots; anything 
   for (let i = 0; i < 2; i++) if (Math.abs(x - MODE_X[i]) < 155 && Math.abs(y - MODE_Y) < 24) { MODE = MODES[i][0]; tone(740, 0.08, 'square', 0.15); return true; }
   for (let i = 0; i < 4; i++) if (Math.abs(x - CARDS[i]) < CARD_W / 2 && y > CARD_Y && y < CARD_Y + CARD_H) { ME = i; tone(660, 0.08, 'square', 0.15); return true; }
   if (Math.abs(x - W / 2) < 230 && Math.abs(y - BOTS_Y) < 22) { moreBots(); tone(520, 0.08, 'square', 0.15); return true; }
-  return false;
+  for (const k in TITLE_BTN) { const b = TITLE_BTN[k]; if (Math.abs(x - b.x) < b.w / 2 && Math.abs(y - b.y) < b.h / 2) hit.add(k === 'solo' ? 'Enter' : k === 'create' ? 'KeyC' : 'KeyJ'); }
+  return true;
 }
 const RES_BTN = { rematch: { x: W / 2 - 170, y: 650, w: 310, h: 58, label: 'REMATCH', key: 'Enter' }, mode: { x: W / 2 + 170, y: 650, w: 310, h: 58, label: 'CHANGE MODE', key: 'Escape' } };
 function resultTap(x, y) { for (const k in RES_BTN) { const b = RES_BTN[k]; if (Math.abs(x - b.x) < b.w / 2 && Math.abs(y - b.y) < b.h / 2) hit.add(b.key); } }
@@ -1365,6 +1527,8 @@ const scenes = {
       for (let i = 0; i < 4; i++) if (pressed('Digit' + (i + 1))) ME = i;
       if (pressed('KeyB')) moreBots();
       if (pressed('Enter') || pressed('Space')) { reset(); scene = 'play'; }
+      else if (pressed('KeyC')) netCreate();
+      else if (pressed('KeyJ')) { net.err = ''; scene = 'join'; const el = document.getElementById('roomcode'); el.value = ''; setTimeout(() => el.focus(), 50); }
     },
     draw() {
       ctx.clearRect(0, 0, W, H); place(1);
@@ -1383,8 +1547,9 @@ const scenes = {
       });
       panel(W / 2 - 230, BOTS_Y - 20, 460, 40); text(`RIVAL BOTS: ${tune.bots}   (${touchy ? 'tap' : 'B'} to change)`, W / 2, BOTS_Y, 19, '#ffe14a');
       panel(W / 2 - 430, 486, 860, 70); (touchy ? (br ? BR_TOUCH_CONTROLS : TOUCH_CONTROLS) : (br ? BR_CONTROLS : CONTROLS)).forEach((c, i) => text(c, W / 2, 507 + i * 28, 17, '#fff'));
-      text(touchy ? 'Tap a mode and a rig, then tap here to start' : 'Up / Down: mode   Left / Right: rig   Enter or click here: start', W / 2, 604, 28, '#fff');
-      text('Combat Racing and Campaign are planned and not built yet', W / 2, 654, 16, '#d8ccff');
+      for (const k in TITLE_BTN) { const b = TITLE_BTN[k], main = k === 'solo'; panel(b.x - b.w / 2, b.y - b.h / 2, b.w, b.h, main ? 'rgba(255,225,74,0.96)' : 'rgba(20,12,48,0.92)'); ctx.strokeStyle = '#fff'; ctx.lineWidth = 3; ctx.strokeRect(b.x - b.w / 2, b.y - b.h / 2, b.w, b.h);
+        text(b.label, b.x, b.y - (touchy ? 0 : 8), 24, main ? PAL.ink : '#fff'); if (!touchy) text(b.key, b.x, b.y + 17, 14, main ? PAL.ink : '#d8ccff'); }
+      text(net.err || (net.status === 'connecting' ? 'Connecting to the game server...' : 'Rooms: Patient Tag for two people on two devices. Combat Racing and Campaign are not built yet.'), W / 2, 668, 16, net.err ? '#ff9ab0' : '#d8ccff');
     },
   },
   play: {
@@ -1401,14 +1566,16 @@ const scenes = {
       drawPlay(); shade(0.7); text(`ROUND ${state.round} SURVIVED`, W / 2, 170, 60, PAL.it);
       text(`${SEAT_NAMES[state.it]} was left holding Mr. Crouch`, W / 2, 230, 26, '#fff'); boardLines(300);
       text(state.round + 1 >= tune.rounds ? 'Last round: the bots stop being polite' : 'Next round: the bots wake up', W / 2, 470, 24, '#d8ccff');
-      text(`${go()} for the next round`, W / 2, 546, 34, '#fff');
+      text(NET ? `Next round in ${Math.max(1, Math.ceil(state.netWait || 0))}` : `${go()} for the next round`, W / 2, 546, 34, '#fff');
     },
   },
   over: { // IT at the buzzer: the round again, never the whole shift
     update() { if (pressed('KeyR') || pressed('Enter')) { startRound(state.round); scene = 'play'; } },
     draw() {
-      drawPlay(); shade(0.75); text('ROUND LOST', W / 2, 220, 76, '#ff6a8a'); text(state.gained, W / 2, 300, 26, '#fff');
-      text('"I shall be writing a letter." - Mr. Crouch', W / 2, 352, 24, '#ffe14a'); text(`${go()} to try this round again`, W / 2, 470, 34, '#fff');
+      drawPlay(); shade(0.75);
+      if (NET) { text(state.it === ME ? 'ROUND LOST' : 'ROUND REPLAYED', W / 2, 220, 72, '#ff6a8a'); text(`${who(state.it)} was stuck with Mr. Crouch at the buzzer: everyone plays the round again`, W / 2, 300, 24, '#fff'); }
+      else { text('ROUND LOST', W / 2, 220, 76, '#ff6a8a'); text(state.gained, W / 2, 300, 26, '#fff'); }
+      text('"I shall be writing a letter." - Mr. Crouch', W / 2, 352, 24, '#ffe14a'); text(NET ? `Replay in ${Math.max(1, Math.ceil(state.netWait || 0))}` : `${go()} to try this round again`, W / 2, 470, 34, '#fff');
     },
   },
   results: {
@@ -1417,8 +1584,61 @@ const scenes = {
       drawPlay(); shade(0.75); text('SHIFT OVER', W / 2, 110, 64, PAL.it); text('PUBLIC TRUST', W / 2, 176, 24, '#fff');
       for (let i = 0; i < 5; i++) star(W / 2 - 160 + i * 80, 236, 34, i < state.stars);
       boardLines(316); text(`You handed Mr. Crouch over ${state.vehicles[ME].tags} time${state.vehicles[ME].tags === 1 ? '' : 's'}`, W / 2, 476, 24, '#d8ccff');
-      text(`${state.score} seconds clean. ${go()} for a new shift`, W / 2, 552, 30, '#fff');
+      if (NET) { text(`You: ${state.score} seconds free of Mr. Crouch`, W / 2, 536, 26, '#fff'); const r = net.players.filter(p => p.seat >= 0).map(p => `P${p.num} ${!p.on ? 'away' : p.ready ? 'ready' : 'not ready'}`).join('   ');
+        text(net.you && net.you.ready ? 'Waiting for the other player' : `${go()} for a rematch in this room`, W / 2, 584, 30, PAL.it); text(r + '      Esc: leave the room', W / 2, 628, 18, '#d8ccff'); }
+      else text(`${state.score} seconds clean. ${go()} for a new shift`, W / 2, 552, 30, '#fff');
     },
+  },
+};
+scenes.join = { // type the four-character code of a friend's room
+  update() {
+    const el = document.getElementById('roomcode');
+    if (pressed('Enter') || pressed('NumpadEnter')) netJoin(el.value);
+    else if (pressed('Escape')) { net.err = ''; scene = 'title'; }
+  },
+  draw() {
+    ctx.clearRect(0, 0, W, H); place(1); render(); shade(0.8);
+    text('JOIN A ROOM', W / 2, 150, 64, PAL.it); text('Type the four-character room code from the host', W / 2, 232, 24, '#fff'); text('(or just open the invite link they sent you)', W / 2, 268, 18, '#d8ccff');
+    for (const k in JOIN_BTN) { const b = JOIN_BTN[k], main = k === 'go'; panel(b.x - b.w / 2, b.y - b.h / 2, b.w, b.h, main ? 'rgba(255,225,74,0.96)' : 'rgba(20,12,48,0.92)'); ctx.strokeStyle = '#fff'; ctx.lineWidth = 3; ctx.strokeRect(b.x - b.w / 2, b.y - b.h / 2, b.w, b.h); text(main ? 'JOIN' : 'BACK', b.x, b.y, 26, main ? PAL.ink : '#fff'); }
+    if (net.err) text(net.err, W / 2, 560, 22, '#ff9ab0'); else if (net.status === 'connecting') text('Connecting...', W / 2, 560, 22, '#d8ccff');
+  },
+};
+scenes.lobby = { // the room before a shift: who is here, what they drive, and the host's start button
+  update() {
+    const you = net.you; if (!you) return;
+    if (pressed('ArrowLeft') || pressed('KeyA')) netSend({ t: 'rig', kind: (you.kind + 3) % 4 });
+    if (pressed('ArrowRight') || pressed('KeyD')) netSend({ t: 'rig', kind: (you.kind + 1) % 4 });
+    for (let i = 0; i < 4; i++) if (pressed('Digit' + (i + 1))) netSend({ t: 'rig', kind: i });
+    if (pressed('KeyC')) copyInvite();
+    if (you.host && pressed('KeyB')) netSend({ t: 'bots', n: net.bots >= 6 ? 0 : net.bots + 1 });
+    if (you.host && (pressed('Enter') || pressed('NumpadEnter'))) netSend({ t: 'start' });
+    if (pressed('Escape')) netLeave();
+  },
+  draw() {
+    ctx.clearRect(0, 0, W, H); place(1);
+    const a = titleT * 0.25, you = net.you, touchy = touch.on || touch.coarse;
+    cam.fov = 58; cam.updateProjectionMatrix(); cam.position.set(Math.sin(a) * 5, 9, 84); cam.lookAt(0, 30, 205); render(); shade(0.72);
+    text('PRIVATE ROOM: PATIENT TAG', W / 2, 36, 22, '#ff6ab0'); text(net.code, W / 2, 100, 92, PAL.it); text('Room code. Or send this link: it opens straight into this room.', W / 2, 172, 18, '#fff');
+    const cb = LOBBY.copy; panel(cb.x - cb.w / 2, cb.y - cb.h / 2, cb.w, cb.h, net.copied > 0 ? 'rgba(125,255,90,0.95)' : 'rgba(255,225,74,0.96)'); text(net.copied > 0 ? 'COPIED' : 'COPY LINK', cb.x, cb.y + 1, 22, PAL.ink);
+    panel(W / 2 - 430, 262, 860, 96);
+    for (let n = 0; n < 2; n++) {
+      const p = net.players[n], y = 286 + n * 44;
+      if (!p) { text('Waiting for a second player...', W / 2, y, 21, '#d8ccff'); continue; }
+      text(`P${p.num}`, W / 2 - 400, y, 24, p.id === (you && you.id) ? PAL.it : '#fff', 'left'); icon(RIGS[p.kind], W / 2 - 320, y, 10, false); text(KINDS[RIGS[p.kind]].label + (p.id === (you && you.id) ? '  (you)' : ''), W / 2 - 296, y, 22, '#fff', 'left');
+      text((p.host ? 'HOST   ' : '') + (p.on ? (net.phase !== 'lobby' && p.seat < 0 ? 'joins at the rematch' : 'here') : 'away'), W / 2 + 400, y, 20, p.on ? '#7dff5a' : '#ff9ab0', 'right');
+    }
+    RIGS.forEach((k, i) => {
+      const x = CARDS[i], on = you && you.kind === i, K = KINDS[k], y = LOBBY.cardY, other = net.players.some(p => p !== you && p.kind === i);
+      panel(x - CARD_W / 2, y, CARD_W, LOBBY.cardH, on ? 'rgba(255,225,74,0.96)' : undefined);
+      icon(k, x, y + 28, 14, false); text(K.label, x, y + 64, 22, on ? PAL.ink : '#fff'); text(K.good, x, y + 90, 15, on ? PAL.ink : '#7dff5a'); text(K.bad, x, y + 110, 15, on ? PAL.ink : '#ff9ab0');
+      text(on ? (other ? 'YOU AND THE OTHER PLAYER' : 'YOU') : other ? 'THE OTHER PLAYER' : '', x, y + 132, 13, on ? PAL.ink : '#7df0ff');
+    });
+    panel(W / 2 - 230, LOBBY.botsY - 20, 460, 40); text(`BOTS IN THE MATCH: ${net.bots}` + (you && you.host ? `   (${touchy ? 'tap' : 'B'} to change)` : ''), W / 2, LOBBY.botsY, 19, '#ffe14a');
+    const sb = LOBBY.start;
+    if (net.phase !== 'lobby') text('A shift is being played: you join at the rematch', W / 2, sb.y, 26, '#fff');
+    else if (you && you.host) { panel(sb.x - sb.w / 2, sb.y - sb.h / 2, sb.w, sb.h, 'rgba(255,225,74,0.96)'); text(net.players.length < 2 ? 'START WITHOUT A SECOND PLAYER' : 'START THE SHIFT', sb.x, sb.y - (touchy ? 0 : 8), net.players.length < 2 ? 22 : 28, PAL.ink); if (!touchy) text('Enter', sb.x, sb.y + 19, 14, PAL.ink); }
+    else text('Waiting for the host to start', W / 2, sb.y, 28, '#fff');
+    text(net.status !== 'on' ? 'Connection lost: reconnecting...' : (touchy ? 'Tap a rig to choose it.' : 'Left / Right: your rig.   C: copy link.   Esc: leave the room.'), W / 2, 680, 16, net.status !== 'on' ? '#ff9ab0' : '#d8ccff');
   },
 };
 scenes.brResults = { // the buzzer has gone: nothing scores any more. Rematch, or change mode.
@@ -1440,7 +1660,8 @@ scenes.brResults = { // the buzzer has gone: nothing scores any more. Rematch, o
 // ---- Loop: fixed step, frame time clamped ---------------------------------------------
 function step() {
   if (pressed('KeyM')) { setMuted(!muted); hit.delete('KeyM'); }
-  scenes[scene].update(STEP); hit.clear(); soundStep();
+  if (NET && NET.client) netClientStep(); else scenes[scene].update(STEP);
+  netHousekeep(); hit.clear(); soundStep();
 }
 let last, acc = 0, ALPHA = 1; // ALPHA: how far the frame is between the last two steps
 function tick() {
@@ -1462,6 +1683,25 @@ window.game = {
   get state() { return state; },
   get me() { return ME; }, set me(i) { ME = i; },
   get mode() { return MODE; }, set mode(m) { MODE = m; },
+  get netInfo() { return { status: net.status, code: net.code, phase: net.phase, players: net.players, you: net.you, err: net.err, link: net.code ? netLink() : '', held: net.held, pending: net.pending.length, client: !!(NET && NET.client) }; },
+  net: { // the server's side of a room: it starts shifts, feeds inputs in and takes snapshots out, all as JSON
+    hostStart(json) { const o = JSON.parse(json); MODE = 'tag'; CONFIG.bots.value = o.bots; ME = o.roles[0]; NET = { host: true, humans: o.humans, roles: o.roles, inputs: {}, away: {}, acks: {}, wait: 0, tagN: 0, tagLog: [] }; reset(); scene = 'play'; },
+    hostInput(seat, json) {
+      const m = JSON.parse(json); if (!NET || !NET.humans.includes(seat)) return;
+      NET.inputs[seat] = { throttle: clamp(+m.th || 0, -1, 1), steer: clamp(+m.st || 0, -1, 1), hand: !!m.h, fire: false }; NET.acks[seat] = m.s | 0;
+      if (m.r && scene === 'play' && state.phase === 'run' && state.vehicles[seat].active) resetOnRoad(state.vehicles[seat]);
+    },
+    hostAway(seat, how) { if (!NET) return; if (how) { NET.away[seat] = how; delete NET.inputs[seat]; } else delete NET.away[seat]; },
+    hostTick() { // between rounds the server counts down, then starts the next one or the replay
+      if (events.length > 600) events.splice(0, events.length - 200);
+      if (scene === 'between' || scene === 'over') { NET.wait += STEP; if (NET.wait >= tune.net_between) { NET.wait = 0; startRound(scene === 'over' ? state.round : state.round + 1); scene = 'play'; } } else NET.wait = 0;
+    },
+    snapshot() {
+      const q = x => Math.round(x * 100) / 100;
+      return JSON.stringify({ sc: scene, r: state.round, ph: state.phase, ct: q(state.count), ck: q(state.clock), it: state.it, tot: state.totals.map(q), w: q(tune.net_between - NET.wait), ack: NET.acks, ev: NET.tagLog,
+        v: state.vehicles.filter(v => v.active).map(v => [v.i, q(v.x), q(v.z), q(v.h), q(v.vx), q(v.vz), v.layer === 'deck' ? 1 : v.layer === 'low' ? 2 : 0, q(Math.max(0, v.stall)), q(Math.max(0, v.immune)), q(v.clean), q(v.spin), v.tags, q(v.grip)]) });
+    },
+  },
   get sounds() { return { ...sounds, context: audio ? audio.ac.state : 'not started' }; },
   press(code) { hit.add(code); },
   hold(code, on) { on ? down.add(code) : down.delete(code); },
@@ -1475,6 +1715,7 @@ window.game = {
 addEventListener('resize', fit); fit();
 reset();
 scene = params.get('scene') || 'title';
+if (params.get('room') && typeof WebSocket !== 'undefined') netJoin(params.get('room'));   // an invite link: straight into that room
 last = clock.now();
 if (params.get('manual') === '1') drawFrame();
 else { requestAnimationFrame(frame); setInterval(timer, 50); }

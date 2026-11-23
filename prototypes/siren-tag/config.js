@@ -119,6 +119,9 @@ window.CONFIG = {
   br_respawn_delay: { value: 2.5, min: 0.5, max: 10, step: 0.5 }, // seconds wrecked before you are back
   br_protect: { value: 3, min: 0, max: 10, step: 0.5 },          // seconds a fresh respawn cannot be hurt; firing ends it
 
+  // ---- Multiplayer rooms -------------------------------------------------------------------
+  net_between: { value: 6, min: 2, max: 20, step: 1 },           // seconds the room waits between rounds before the next one starts by itself
+
   // ---- Civilian traffic (thin stand-in) ----------------------------------------------------
   civ_count: { value: 6, min: 0, max: 12, step: 1 },
   civ_speed: { value: 9, min: 3, max: 18, step: 0.5 },           // m/s cruising

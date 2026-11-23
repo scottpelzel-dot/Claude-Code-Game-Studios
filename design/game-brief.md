@@ -26,6 +26,7 @@ After play: the owner gave a full roadmap, "Build brief for Crash Out: Houston E
 After play: "Okay there needs to be more time more bots and they need to be way better"
 After play: "Some of the bots are just driving around in circles on the edge of the map."
 After play: "Build Battle Royale now in the existing Crash Out: Houston Edition prototype. Start from the latest four-rig Patient Tag build. Scott likes the subtle vehicle differences and considers the current handling good. Keep those tuning values. His requested gameplay change is more skilled bots." The request went on to ask for a mode picker, a three-minute free-roam battle scored on wrecks with unlimited respawns, one shared forward-firing blaster with ammo crates on the paved and dirt routes, a FIRE button under the right thumb, a protected respawn that ends on firing, bots that decide better (a crossing intercept in Tag; ammo seeking, lining up shots, breaking off and fighting each other in Battle Royale) under the same weapon rules as the player, and the four signature abilities held for the next pass.
+After play: "Build the first playable multiplayer version of Crash Out: Houston Edition now. Work from the newest source in this session, including any Battle Royale work already present. Start with private-room Patient Tag for two human players on separate devices." The request went on to ask for Solo Play kept beside Create Room and Join Room, an invite link and short code, any rig for each player with duplicates told apart, bots in the remaining seats, a rematch in the same room, one authoritative simulation on a server that reuses the game's own rules, a shared replay when a person holds Mr. Crouch at the buzzer, exactly one handoff per collision, responsive local steering with smoothed remote rigs, and a held seat for a player who drops.
 
 **Pitch:** Vehicle tag between rival emergency crews: whoever is stuck with the town's most insufferable patient is "IT", and the only way to get rid of him is to ram him into someone else's vehicle. *(guessed: the patient as the tag)*
 
@@ -82,6 +83,12 @@ The bots are a real fight from round one: they drive at nearly full speed, aim a
 - [x] Health for every rig, one wreck credited to whoever landed the last hit, a short respawn delay and a protection window that ends if you fire
 - [x] A results screen with wrecks, losses, placement, Rematch and Change Mode
 - [x] FIRE under the right thumb on a phone, with DRIFT beside it
+- [x] Private rooms for two people on two devices, Patient Tag only: Create Room gives a four-character code and an invite link that opens straight into the lobby; Join Room takes the code
+- [x] A room server (`server.js`, no packages) that runs the game's own rules once per room: browsers send driving, the server owns positions, bots, collisions, the patient, the clock and the scores
+- [x] Either player picks any rig; a duplicate gets the second call sign (Medic 3 and Medic 5) and a P1 or P2 tag over the rig; the host sets the bots and starts; both press for a rematch in the same room
+- [x] One shared round result: a person holding Mr. Crouch at the buzzer replays the round for everyone; each person sees their own time free of him
+- [x] Your own rig is predicted locally and corrected smoothly; other rigs ease towards the server's reports
+- [x] A dropped player's seat is held, braked, for 20 seconds, then driven by a bot until they return; the same link puts them back in their seat
 - [x] Bot decisions: in Tag an IT bot predicts which bayou crossing you are taking and cuts you off at its exit when it can get there; in Battle Royale bots fetch ammo when dry, line up shots with a reaction delay and aiming error, give up a bad pursuit and fight one another
 - [x] Touch controls for a phone held sideways, beside the keyboard
 - [x] Civilian traffic that pulls over for sirens (thin stand-in) *(guessed)*
@@ -103,7 +110,8 @@ The bots are a real fight from round one: they drive at nearly full speed, aim a
 - No existing game's names, characters, map, art or collectibles
 
 ## Out of scope
-- Online: session (a match with friends on their own machines): needs a server, so not built; built instead: bots in the seats, named as bots. Every vehicle takes a swappable driver (you, a bot, later a remote player).
+- Online play over the internet: the room server exists and runs on one computer's network; friends on cellular need it hosted somewhere public, which is a decision still to make
+- Rooms for Battle Royale, and more than two people to a room: add it as a feature
 - Split-screen tag with a friend on one machine: change it after play
 - Combat Racing and Campaign, in that order (`design/crash-out-roadmap.md`): add it as a feature
 - The four rig abilities (Priority Run, Water Cannon, Siren Pulse, Armor Up): add it as a feature, next pass
