@@ -11,6 +11,7 @@
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
 <title>Crash Out: Houston Edition</title>
 <style>
+  :root { --sal: env(safe-area-inset-left, 0px); --sar: env(safe-area-inset-right, 0px); }
   html { box-sizing: border-box; }
   html, body { margin: 0; height: 100%; background: #000; overflow: hidden; touch-action: none; user-select: none; -webkit-user-select: none; }
   body { font-variant-numeric: tabular-nums; }
@@ -60,7 +61,8 @@ const ctx = canvas.getContext('2d');
 const renderer = new THREE.WebGLRenderer({ canvas: document.getElementById('gl'), antialias: !CHEAP });
 renderer.shadowMap.enabled = !CHEAP; renderer.shadowMap.type = THREE.PCFSoftShadowMap;
 let viewW = W; // the HUD's width on screen, in CSS pixels: a narrow one gets the phone HUD
-let SCALE = 1, EX = 0, EY = 0, camReady = false;
+let SCALE = 1, EX = 0, EY = 0, camReady = false, SAFE_L = 0, SAFE_R = 0;
+const edgeShift = safe => Math.max(0, Math.min(EX * 0.7, EX - safe / SCALE - 6));   // how far a thumb control moves out towards the edge of a wide screen
 function fit() { // fills the window at any size and pixel ratio
   // The room actually on offer: the visible window, less any padding the host page keeps clear for
   // its own bars (a phone's safe areas, an app's close and share buttons).
@@ -69,6 +71,7 @@ function fit() { // fills the window at any size and pixel ratio
     const vv = window.visualViewport, root = getComputedStyle(document.documentElement), body = getComputedStyle(document.body), px = (st, k) => parseFloat(st[k]) || 0;
     if (vv) { availW = Math.min(availW, vv.width); availH = Math.min(availH, vv.height); }
     availW -= px(root, 'paddingLeft') + px(root, 'paddingRight') + px(body, 'paddingLeft') + px(body, 'paddingRight');
+    SAFE_L = parseFloat(root.getPropertyValue('--sal')) || 0; SAFE_R = parseFloat(root.getPropertyValue('--sar')) || 0;   // a notch or a rounded corner: the picture may run under it, the controls may not
     availH -= px(root, 'paddingTop') + px(root, 'paddingBottom') + px(body, 'paddingTop') + px(body, 'paddingBottom');
   }
   const s = Math.max(0.1, Math.min(availW / W, availH / H));
@@ -127,7 +130,7 @@ const BTN_BR = { // FIRE sits under the right thumb, DRIFT beside it
   fire: { x: W - 124, y: H - 140, r: 80, label: 'FIRE' }, drift: { x: W - 300, y: H - 84, r: 56, label: 'DRIFT' },
   pause: BTN_TAG.pause, reset: BTN_TAG.reset,
 };
-const btns = () => { const src = MODE === 'br' ? BTN_BR : BTN_TAG, out = {}; for (const k in src) out[k] = { ...src[k], x: src[k].x + EX * 0.7 }; return out; };   // out towards the real edge of a wide screen
+const btns = () => { const src = MODE === 'br' ? BTN_BR : BTN_TAG, out = {}; for (const k in src) out[k] = { ...src[k], x: src[k].x + edgeShift(SAFE_R) }; return out; };   // out towards the real edge of a wide screen
 const touchHeld = k => { for (const v of touch.held.values()) if (v === k) return true; return false; };
 function toLogical(e) { const r = canvas.getBoundingClientRect(); return [(e.clientX - r.left) / SCALE - EX, (e.clientY - r.top) / SCALE - EY]; }
 addEventListener('pointerdown', e => {
@@ -1345,7 +1348,7 @@ function hud() {
 function touchHud() { // the thumb controls, drawn: a round directional pad on the left, buttons on the right
   const ring = (x, y, r, fill, line) => { ctx.beginPath(); ctx.arc(x, y, r, 0, 7); ctx.fillStyle = fill; ctx.fill(); ctx.lineWidth = 4; ctx.strokeStyle = line; ctx.stroke(); };
   for (const k in btns()) { const b = btns()[k], on = touchHeld(k); ring(b.x, b.y, b.r, on ? 'rgba(255,225,74,0.9)' : 'rgba(20,12,48,0.6)', on ? PAL.ink : '#fff'); text(b.label, b.x, b.y, b.r > 40 ? 26 : 16, on ? PAL.ink : '#fff'); }
-  const held = touch.steerId !== null, bx = held ? touch.x0 : PAD.x - EX * 0.7, by = held ? touch.y0 : PAD.y, R = tune.touch_pad_range;
+  const held = touch.steerId !== null, bx = held ? touch.x0 : PAD.x - edgeShift(SAFE_L), by = held ? touch.y0 : PAD.y, R = tune.touch_pad_range;
   let kx = held ? touch.x - touch.x0 : 0, ky = held ? touch.y - touch.y0 : 0; const kd = Math.hypot(kx, ky); if (kd > R) { kx *= R / kd; ky *= R / kd; }
   ring(bx, by, R + 30, 'rgba(20,12,48,0.55)', '#fff');
   ctx.fillStyle = '#fff';
@@ -1517,7 +1520,7 @@ const canFull = () => typeof document !== 'undefined' && !!document.fullscreenEn
 const FULL_BTN = { x: W - 110, y: 34, w: 190, h: 40 };
 function goFull() { try { const p = document.documentElement.requestFullscreen({ navigationUI: 'hide' }); if (p && p.catch) p.catch(() => {}); } catch (e) { /* this browser has no full screen */ } }
 function titleTap(x, y) { // pick a mode, a rig or the number of bots; anything else starts the match
-  if (canFull() && Math.abs(x - (FULL_BTN.x + EX * 0.7)) < FULL_BTN.w / 2 && Math.abs(y - FULL_BTN.y) < FULL_BTN.h / 2) { goFull(); return true; }
+  if (canFull() && Math.abs(x - (FULL_BTN.x + edgeShift(SAFE_R))) < FULL_BTN.w / 2 && Math.abs(y - FULL_BTN.y) < FULL_BTN.h / 2) { goFull(); return true; }
   for (let i = 0; i < 2; i++) if (Math.abs(x - MODE_X[i]) < 155 && Math.abs(y - MODE_Y) < 24) { MODE = MODES[i][0]; tone(740, 0.08, 'square', 0.15); return true; }
   for (let i = 0; i < 4; i++) if (Math.abs(x - CARDS[i]) < CARD_W / 2 && y > CARD_Y && y < CARD_Y + CARD_H) { ME = i; tone(660, 0.08, 'square', 0.15); return true; }
   if (Math.abs(x - W / 2) < 230 && Math.abs(y - BOTS_Y) < 22) { moreBots(); tone(520, 0.08, 'square', 0.15); return true; }
@@ -1571,7 +1574,7 @@ const scenes = {
       });
       panel(W / 2 - 230, BOTS_Y - 20, 460, 40); text(`RIVAL BOTS: ${tune.bots}   (${touchy ? 'tap' : 'B'} to change)`, W / 2, BOTS_Y, 19, '#ffe14a');
       panel(W / 2 - 430, 486, 860, 70); (touchy ? (br ? BR_TOUCH_CONTROLS : TOUCH_CONTROLS) : (br ? BR_CONTROLS : CONTROLS)).forEach((c, i) => text(c, W / 2, 507 + i * 28, 17, '#fff'));
-      if (canFull()) { const fb = FULL_BTN, fx = fb.x + EX * 0.7; panel(fx - fb.w / 2, fb.y - fb.h / 2, fb.w, fb.h); ctx.strokeStyle = '#fff'; ctx.lineWidth = 2; ctx.strokeRect(fx - fb.w / 2, fb.y - fb.h / 2, fb.w, fb.h); text(touchy ? 'FULL SCREEN' : 'FULL SCREEN (G)', fx, fb.y + 1, 16, '#fff'); }
+      if (canFull()) { const fb = FULL_BTN, fx = fb.x + edgeShift(SAFE_R); panel(fx - fb.w / 2, fb.y - fb.h / 2, fb.w, fb.h); ctx.strokeStyle = '#fff'; ctx.lineWidth = 2; ctx.strokeRect(fx - fb.w / 2, fb.y - fb.h / 2, fb.w, fb.h); text(touchy ? 'FULL SCREEN' : 'FULL SCREEN (G)', fx, fb.y + 1, 16, '#fff'); }
       for (const k in TITLE_BTN) { const b = TITLE_BTN[k], main = k === 'solo'; panel(b.x - b.w / 2, b.y - b.h / 2, b.w, b.h, main ? 'rgba(255,225,74,0.96)' : 'rgba(20,12,48,0.92)'); ctx.strokeStyle = '#fff'; ctx.lineWidth = 3; ctx.strokeRect(b.x - b.w / 2, b.y - b.h / 2, b.w, b.h);
         text(b.label, b.x, b.y - (touchy ? 0 : 8), 24, main ? PAL.ink : '#fff'); if (!touchy) text(b.key, b.x, b.y + 17, 14, main ? PAL.ink : '#d8ccff'); }
       text(net.err || (net.status === 'connecting' ? 'Connecting to the game server...' : 'Rooms: Patient Tag for two people on two devices. Combat Racing and Campaign are not built yet.'), W / 2, 668, 16, net.err ? '#ff9ab0' : '#d8ccff');
