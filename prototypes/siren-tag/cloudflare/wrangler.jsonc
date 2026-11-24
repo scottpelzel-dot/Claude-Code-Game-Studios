@@ -1,0 +1,13 @@
+// Crash Out: Houston Edition on Cloudflare: one Worker for the game's files, one Durable Object per room.
+// Deploy from this folder: npx wrangler deploy
+{
+  "name": "crash-out-houston",
+  "main": "src/worker.js",
+  "compatibility_date": "2025-09-01",
+  "build": { "command": "node build.mjs" },
+  "assets": { "directory": "./public", "binding": "ASSETS" },
+  "durable_objects": { "bindings": [{ "name": "ROOMS", "class_name": "RoomDO" }] },
+  // Durable Objects on the free plan must be the SQLite-backed kind. This room keeps nothing on disk.
+  "migrations": [{ "tag": "v1", "new_sqlite_classes": ["RoomDO"] }],
+  "observability": { "enabled": true }
+}

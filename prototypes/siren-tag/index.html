@@ -1465,6 +1465,7 @@ function hostDriver(v) { // on the server: a person's seat takes that person's l
   if (!NET.humans.includes(v.i)) return botDriver(v);
   if (NET.away[v.i] === 'bot') return botDriver(v);
   if (NET.away[v.i]) return { throttle: 0, steer: 0, hand: true, fire: false };
+  const at = NET.next[v.i]; if (at !== undefined) { NET.acks[v.i] = at; NET.next[v.i] = at + 1; }   // this step uses the input for the person's step `at`; an unchanged input carries on to the next
   return NET.inputs[v.i] || { throttle: 0, steer: 0, hand: false, fire: false };
 }
 const NO_SERVER = 'Rooms need the game server, and this page has none. Solo Play works here; for rooms, run server.js and open its address.';
@@ -1476,7 +1477,7 @@ function netOpen(first) {
   net.left = false; if (net.status !== 'lost') net.status = 'connecting'; let opened = false, ws;
   // Some pages forbid the connection outright (the Claude preview does), and some browsers refuse by
   // throwing, not by failing quietly. Either way: say so on the title screen and carry on.
-  try { ws = new WebSocket((location.protocol === 'https:' ? 'wss://' : 'ws://') + location.host + '/ws'); }
+  try { ws = new WebSocket((location.protocol === 'https:' ? 'wss://' : 'ws://') + location.host + '/ws?room=' + encodeURIComponent(first.room || net.code || '')); }   // the room is in the address, so a host that runs one room per code can route it
   catch (e) { net.ws = null; if (net.code) { net.status = 'lost'; net.retry = 3; } else { net.status = 'off'; net.err = NO_SERVER; if (scene === 'join' || scene === 'lobby') scene = 'title'; } return; }
   net.ws = ws;
   setTimeout(() => { if (!opened && net.ws === ws) { try { ws.close(); } catch (e) { /* already gone */ } if (net.ws === ws) ws.onclose(); } }, 6000);   // no answer in six seconds is no server
@@ -1489,7 +1490,11 @@ function netOpen(first) {
     net.status = 'lost'; net.retry = 1;                      // in a room: keep trying to get back to the seat
   };
 }
-function netCreate() { net.err = ''; net.code = ''; netOpen({ t: 'create' }); }
+const NET_CODE_CHARS = 'ABCDEFGHJKMNPQRSTUVWXYZ23456789';
+function netCreate() { // the browser proposes a room code; if it is taken the server says so and this tries another
+  let code = ''; for (let i = 0; i < 4; i++) code += NET_CODE_CHARS[Math.floor(Math.random() * NET_CODE_CHARS.length)];
+  net.err = ''; net.code = ''; netOpen({ t: 'create', room: code });
+}
 function netJoin(code) { code = String(code || '').toUpperCase().replace(/[^A-Z0-9]/g, '').slice(0, 4); if (code.length < 4) { net.err = 'A room code has four characters.'; return; } net.err = ''; net.code = ''; netOpen({ t: 'join', room: code, token: netToken(code) }); }
 function netLeave() { net.left = true; netSend({ t: 'leave' }); if (net.ws) net.ws.close(); net.code = ''; net.status = 'off'; net.players = []; if (NET) { NET = null; ME = ME % 4; reset(); } scene = 'title'; }
 function netMsg(m) {
@@ -1504,6 +1509,7 @@ function netMsg(m) {
       } else { NET.humans = humans; NET.pnum = pnum; }
     } else { if (NET) { NET = null; ME = ME % 4; reset(); } scene = 'lobby'; }
   } else if (m.t === 'snap') applySnap(m);
+  else if (m.t === 'err' && m.retry) { net.left = true; if (net.ws) net.ws.close(); netCreate(); }
   else if (m.t === 'err') { net.err = m.msg; if (m.fatal) { net.left = true; net.code = ''; if (net.ws) net.ws.close(); if (NET) { NET = null; ME = ME % 4; reset(); } scene = 'title'; } }
 }
 function applySnap(m) { // what the server says is so
@@ -1550,7 +1556,9 @@ function netClientStep() { // a browser in a room: send the driving, predict you
   if (running) {
     const inp = humanDriver(); inp.fire = false;
     const msg = { t: 'in', s: ++net.seq, th: +inp.throttle.toFixed(2), st: +inp.steer.toFixed(2), h: inp.hand ? 1 : 0 }; if (pressed('KeyR')) msg.r = 1;
-    netSend(msg); net.pending.push({ s: net.seq, inp }); if (net.pending.length > 240) net.pending.shift();
+    // Send when the driving changes, and otherwise ten times a second: the server carries the last input forward a step at a time.
+    const sig = msg.th + '|' + msg.st + '|' + msg.h; if (sig !== net.lastSig || msg.r || net.seq % 6 === 0) { net.lastSig = sig; netSend(msg); }
+    net.pending.push({ s: net.seq, inp }); if (net.pending.length > 240) net.pending.shift();
     if (me.active && net.status === 'on') { me.inp = inp; drive(me, dt); hitWorld(me); layerOf(me); }
     state.clock = Math.max(0, state.clock - dt);
     if (state.it === ME) { state.gripeT -= dt; if (state.gripeT <= 0) { state.gripeT = 4.2; state.gripe = (state.gripe + 1) % LINES.gripes.length; } }
@@ -1808,11 +1816,21 @@ window.game = {
   get mode() { return MODE; }, set mode(m) { MODE = m; },
   get netInfo() { return { status: net.status, code: net.code, phase: net.phase, players: net.players, you: net.you, err: net.err, link: net.code ? netLink() : '', held: net.held, pending: net.pending.length, client: !!(NET && NET.client) }; },
   net: { // the server's side of a room: it starts shifts, feeds inputs in and takes snapshots out, all as JSON
-    hostStart(json) { const o = JSON.parse(json); MODE = 'tag'; CONFIG.bots.value = o.bots; ME = o.roles[0]; NET = { host: true, humans: o.humans, roles: o.roles, inputs: {}, away: {}, acks: {}, wait: 0, tagN: 0, tagLog: [] }; reset(); scene = 'play'; },
+    hostStart(json) { const o = JSON.parse(json); MODE = 'tag'; CONFIG.bots.value = o.bots; ME = o.roles[0]; NET = { host: true, humans: o.humans, roles: o.roles, inputs: {}, away: {}, acks: {}, next: {}, wait: 0, tagN: 0, tagLog: [] }; reset(); scene = 'play'; },
     hostInput(seat, json) {
       const m = JSON.parse(json); if (!NET || !NET.humans.includes(seat)) return;
-      NET.inputs[seat] = { throttle: clamp(+m.th || 0, -1, 1), steer: clamp(+m.st || 0, -1, 1), hand: !!m.h, fire: false }; NET.acks[seat] = m.s | 0;
+      NET.inputs[seat] = { throttle: clamp(+m.th || 0, -1, 1), steer: clamp(+m.st || 0, -1, 1), hand: !!m.h, fire: false }; NET.next[seat] = m.s | 0;
       if (m.r && scene === 'play' && state.phase === 'run' && state.vehicles[seat].active) resetOnRoad(state.vehicles[seat]);
+    },
+    hostTest(json) { // stage a situation, for the checks: who is IT, the clock, where rigs stand. Only reachable when the server allows tests.
+      const o = JSON.parse(json), humans = NET.humans;
+      if (o.park) { let k = 0; const far = [[-120, -120], [120, -120], [-120, 60], [120, 60], [-120, 0], [120, 0]]; for (const v of state.vehicles) { if (v.i >= NR) { v.x = 900 + v.i * 9; v.z = 900; } else if (v.active && !humans.includes(v.i)) { [v.x, v.z] = far[k++ % far.length]; v.vx = v.vz = 0; v.stall = 30; } } }
+      for (const [i, x, z, h] of o.place || []) Object.assign(state.vehicles[i], { x, z, h, vx: 0, vz: 0, spin: 0, stall: 0, immune: 0, layer: null });
+      if (o.clear) for (const i of humans) { state.vehicles[i].immune = 0; state.vehicles[i].stall = 0; }
+      if (o.it !== undefined) state.it = o.it === 'bot' ? state.roles.find(i => !humans.includes(i)) : o.it;
+      if (o.round) state.round = o.round;
+      if (o.clock !== undefined) state.clock = o.clock;
+      if (o.place || o.park) NET.inputs = {};
     },
     hostAway(seat, how) { if (!NET) return; if (how) { NET.away[seat] = how; delete NET.inputs[seat]; } else delete NET.away[seat]; },
     hostTick() { // between rounds the server counts down, then starts the next one or the replay

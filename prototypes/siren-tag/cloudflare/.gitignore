@@ -1,0 +1,4 @@
+public/
+src/sim.generated.js
+node_modules/
+.wrangler/
