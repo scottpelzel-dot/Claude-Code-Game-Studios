@@ -35,6 +35,8 @@ After play: "i do want anyone to play this game eventually. so lets do a public 
 After play: "what about supabase?"
 After play: "well my zombie game is hosted for free with better hosting i thought"
 After play: "This is info for zombie game.. Yes. The whole thing runs on Cloudflare: - **The game itself:** a Cloudflare Worker named `first-response-houston` serves the page, code, models and sounds. - **Leaderboard and play counts:** a Cloudflare D1 database called `frh-leaderboard`. - **Co-op rooms:** a Cloudflare Durable Object, which keeps the players in a shared street connected to each other. It's on the free `workers.dev` address rather than a domain of your own. Each deploy I do uploads a new version there under your Cloudflare account."
+After play: "lets work on re doing the main screen"
+After play: "needs to be optimized for phones"
 
 **Pitch:** Vehicle tag between rival emergency crews: whoever is stuck with the town's most insufferable patient is "IT", and the only way to get rid of him is to ram him into someone else's vehicle. *(guessed: the patient as the tag)*
 
@@ -98,6 +100,7 @@ The bots are a real fight from round one: they drive at nearly full speed, aim a
 - [x] Your own rig is predicted locally and corrected smoothly; other rigs ease towards the server's reports
 - [x] A dropped player's seat is held, braked, for 20 seconds, then driven by a bot until they return; the same link puts them back in their seat
 - [x] One room core (`room-core.mjs`) shared by the plain server and the Cloudflare Worker; a browser that hears nothing for three seconds in a match reconnects by itself
+- [x] A main screen laid out for a phone held sideways: a big PLAY with Create Room and Join Room under the left thumb; mode, rig, bots and full screen under the right; the rig you picked turning in the middle; every choice a thumb-sized box
 - [x] Health crates in Battle Royale: white with a red cross, 40 health each, seven of them, back after 14 seconds; an arrow and a banner when you are low; bots fetch them when badly hurt
 - [x] A dusk graphics pass: lit windows and rooftop signs, lanterns on the palms with pools of light, zebra crossings, textured asphalt, drifting water, headlights and tail lights, tyre marks from drifts, stars, cloud bands, a haze round the sun, a lit bridge and a soft vignette
 - [x] Bot decisions: in Tag an IT bot predicts which bayou crossing you are taking and cuts you off at its exit when it can get there; in Battle Royale bots fetch ammo when dry, line up shots with a reaction delay and aiming error, give up a bad pursuit and fight one another

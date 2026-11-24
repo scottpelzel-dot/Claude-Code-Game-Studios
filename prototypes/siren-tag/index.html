@@ -1613,20 +1613,27 @@ function copyInvite() { // the link is also in the box, to select by hand where 
 }
 const JOIN_BTN = { go: { x: W / 2 - 150, y: 470, w: 260, h: 58 }, back: { x: W / 2 + 150, y: 470, w: 260, h: 58 } };
 function joinTap(x, y) { for (const k in JOIN_BTN) { const b = JOIN_BTN[k]; if (Math.abs(x - b.x) < b.w / 2 && Math.abs(y - b.y) < b.h / 2) hit.add(k === 'go' ? 'Enter' : 'Escape'); } }
-const TITLE_BTN = { solo: { x: W / 2 - 290, y: 612, w: 272, h: 56, label: 'SOLO PLAY', key: 'Enter' }, create: { x: W / 2, y: 612, w: 272, h: 56, label: 'CREATE ROOM', key: 'C' }, join: { x: W / 2 + 290, y: 612, w: 272, h: 56, label: 'JOIN ROOM', key: 'J' } };
 let titleT = 0;
-const CARDS = [W / 2 - 318, W / 2 - 106, W / 2 + 106, W / 2 + 318], CARD_W = 200, CARD_Y = 252, CARD_H = 172, BOTS_Y = 452;
+// The main screen is laid out for a phone held sideways: the three ways to start under the left
+// thumb, the choices under the right, and the rig you picked turning in the middle. On a wide
+// screen the two columns move out towards the edges.
+const TCOL = 430, titleShift = () => Math.min(EX * 0.6, 80), TL = () => 255 - titleShift(), TR = () => W - 255 + titleShift();
+const TITLE_BTN = { solo: { dx: 0, y: 320, w: TCOL, h: 124, label: 'PLAY', sub: 'solo, against the bots', key: 'Enter', size: 58 }, create: { dx: -111, y: 462, w: 208, h: 92, label: 'CREATE ROOM', sub: 'play a friend', key: 'C', size: 25 }, join: { dx: 111, y: 462, w: 208, h: 92, label: 'JOIN ROOM', sub: 'enter a code', key: 'J', size: 25 } };
+const stepBots = d => { CONFIG.bots.value = Math.max(CONFIG.bots.min, Math.min(CONFIG.bots.max, tune.bots + d)); };
 const moreBots = () => { CONFIG.bots.value = tune.bots >= CONFIG.bots.max ? CONFIG.bots.min : tune.bots + 1; };
-const MODE_Y = 184, MODE_X = [W / 2 - 165, W / 2 + 165], MODES = [['tag', 'PATIENT TAG'], ['br', 'BATTLE ROYALE']];
+const MODE_Y = 72, MODE_W = 211, MODE_H = 80, MODE_DX = [-110, 110], MODES = [['tag', 'PATIENT TAG'], ['br', 'BATTLE ROYALE']];
+const MODE_BLURB = { tag: ['Ram a rival to hand over Mr. Crouch.', "Don't be IT at the buzzer."], br: ['Blast rivals. Grab ammo and health.', 'Most wrecks in three minutes wins.'] };
+const RIG_SHORT = ['AMBULANCE', 'FIRE', 'POLICE', 'HUMVEE'], RIG_DX = [-163.5, -54.5, 54.5, 163.5], RIG_W = 101, RIG_Y = 202, RIG_H = 112, INFO_Y = 324, INFO_H = 118, BOTS_Y = 500, BOTS_H = 88, FULL_Y = 592, FULL_H = 60;
+const CARDS = [W / 2 - 318, W / 2 - 106, W / 2 + 106, W / 2 + 318], CARD_W = 200;   // the rig cards in a room's lobby
 const canFull = () => typeof document !== 'undefined' && !!document.fullscreenEnabled && !document.fullscreenElement;
-const FULL_BTN = { x: W - 110, y: 34, w: 190, h: 40 };
 function goFull() { try { const p = document.documentElement.requestFullscreen({ navigationUI: 'hide' }); if (p && p.catch) p.catch(() => {}); } catch (e) { /* this browser has no full screen */ } }
-function titleTap(x, y) { // pick a mode, a rig or the number of bots; anything else starts the match
-  if (canFull() && Math.abs(x - (FULL_BTN.x + edgeShift(SAFE_R))) < FULL_BTN.w / 2 && Math.abs(y - FULL_BTN.y) < FULL_BTN.h / 2) { goFull(); return true; }
-  for (let i = 0; i < 2; i++) if (Math.abs(x - MODE_X[i]) < 155 && Math.abs(y - MODE_Y) < 24) { MODE = MODES[i][0]; tone(740, 0.08, 'square', 0.15); return true; }
-  for (let i = 0; i < 4; i++) if (Math.abs(x - CARDS[i]) < CARD_W / 2 && y > CARD_Y && y < CARD_Y + CARD_H) { ME = i; tone(660, 0.08, 'square', 0.15); return true; }
-  if (Math.abs(x - W / 2) < 230 && Math.abs(y - BOTS_Y) < 22) { moreBots(); tone(520, 0.08, 'square', 0.15); return true; }
-  for (const k in TITLE_BTN) { const b = TITLE_BTN[k]; if (Math.abs(x - b.x) < b.w / 2 && Math.abs(y - b.y) < b.h / 2) hit.add(k === 'solo' ? 'Enter' : k === 'create' ? 'KeyC' : 'KeyJ'); }
+function titleTap(x, y) { // every choice is a box big enough for a thumb; a tap anywhere else does nothing
+  const L = TL(), R = TR(), blip = f => tone(f, 0.08, 'square', 0.15), inB = (cx, cy, w, h) => Math.abs(x - cx) < w / 2 && Math.abs(y - cy) < h / 2;
+  for (let i = 0; i < 2; i++) if (inB(R + MODE_DX[i], MODE_Y, MODE_W + 8, MODE_H)) { MODE = MODES[i][0]; blip(740); return true; }
+  for (let i = 0; i < 4; i++) if (inB(R + RIG_DX[i], RIG_Y + RIG_H / 2, RIG_W + 8, RIG_H)) { ME = i; blip(660); return true; }
+  if (inB(R, BOTS_Y, TCOL, BOTS_H)) { if (x < R - 60) stepBots(-1); else if (x > R + 60) stepBots(1); else moreBots(); blip(520); return true; }
+  if (canFull() && inB(R, FULL_Y + FULL_H / 2, TCOL, FULL_H)) { goFull(); return true; }
+  for (const k in TITLE_BTN) { const b = TITLE_BTN[k]; if (inB(L + b.dx, b.y, b.w, b.h)) hit.add(k === 'solo' ? 'Enter' : k === 'create' ? 'KeyC' : 'KeyJ'); }
   return true;
 }
 const RES_BTN = { rematch: { x: W / 2 - 170, y: 650, w: 310, h: 58, label: 'REMATCH', key: 'Enter' }, mode: { x: W / 2 + 170, y: 650, w: 310, h: 58, label: 'CHANGE MODE', key: 'Escape' } };
@@ -1660,26 +1667,31 @@ const scenes = {
       else if (pressed('KeyJ')) { net.err = ''; scene = 'join'; const el = document.getElementById('roomcode'); el.value = ''; setTimeout(() => el.focus(), 50); }
     },
     draw() {
-      ctx.clearRect(-EX, -EY, W + 2 * EX, H + 2 * EY); place(1);
-      const a = titleT * 0.25, touchy = touch.on || touch.coarse, br = MODE === 'br';   // the first picture: the bridge over the bayou, downtown ahead
-      cam.fov = 58; cam.updateProjectionMatrix(); cam.position.set(Math.sin(a) * 5, 9 + Math.sin(a * 0.7), 84 + Math.sin(a * 0.5) * 10); cam.lookAt(0, 30, 205); render();
-      shade(0.45); text(TITLE.toUpperCase(), W / 2 + 4, 70, 84, PAL.ink); text(TITLE.toUpperCase(), W / 2, 66, 84, PAL.it);
-      text(EDITION.toUpperCase(), W / 2, 128, 30, '#ff6ab0');
-      MODES.forEach(([m, label], i) => { const on = MODE === m; panel(MODE_X[i] - 155, MODE_Y - 24, 310, 48, on ? 'rgba(255,225,74,0.96)' : undefined); text(label, MODE_X[i], MODE_Y + 1, 24, on ? PAL.ink : '#fff'); });
-      text(br ? 'Three minutes, blasters and ammo crates. Most rival wrecks at the buzzer wins.' : "Whoever carries Mr. Crouch is IT. Ram a rival to hand him over. Don't be IT at the buzzer.", W / 2, 230, 18, '#fff');
-      RIGS.forEach((k, i) => {
-        const x = CARDS[i], on = i === ME, K = KINDS[k], nb = botSeats().filter(j => j % 4 === i).length;
-        panel(x - CARD_W / 2, CARD_Y, CARD_W, CARD_H, on ? 'rgba(255,225,74,0.96)' : undefined);
-        icon(k, x, CARD_Y + 34, 15, false); text(K.label, x, CARD_Y + 76, 23, on ? PAL.ink : '#fff');
-        text(K.good, x, CARD_Y + 104, 15, on ? PAL.ink : '#7dff5a'); text(K.bad, x, CARD_Y + 126, 15, on ? PAL.ink : '#ff9ab0');
-        text(on ? (nb ? `YOU + ${nb} BOT` : 'YOU') : nb ? `${nb} BOT${nb > 1 ? 'S' : ''}` : 'SITS OUT', x, CARD_Y + 153, 16, on ? PAL.ink : '#d8ccff');
-      });
-      panel(W / 2 - 230, BOTS_Y - 20, 460, 40); text(`RIVAL BOTS: ${tune.bots}   (${touchy ? 'tap' : 'B'} to change)`, W / 2, BOTS_Y, 19, '#ffe14a');
-      panel(W / 2 - 430, 486, 860, 70); (touchy ? (br ? BR_TOUCH_CONTROLS : TOUCH_CONTROLS) : (br ? BR_CONTROLS : CONTROLS)).forEach((c, i) => text(c, W / 2, 507 + i * 28, 17, '#fff'));
-      if (canFull()) { const fb = FULL_BTN, fx = fb.x + edgeShift(SAFE_R); panel(fx - fb.w / 2, fb.y - fb.h / 2, fb.w, fb.h); ctx.strokeStyle = '#fff'; ctx.lineWidth = 2; ctx.strokeRect(fx - fb.w / 2, fb.y - fb.h / 2, fb.w, fb.h); text(touchy ? 'FULL SCREEN' : 'FULL SCREEN (G)', fx, fb.y + 1, 16, '#fff'); }
-      for (const k in TITLE_BTN) { const b = TITLE_BTN[k], main = k === 'solo'; panel(b.x - b.w / 2, b.y - b.h / 2, b.w, b.h, main ? 'rgba(255,225,74,0.96)' : 'rgba(20,12,48,0.92)'); ctx.strokeStyle = '#fff'; ctx.lineWidth = 3; ctx.strokeRect(b.x - b.w / 2, b.y - b.h / 2, b.w, b.h);
-        text(b.label, b.x, b.y - (touchy ? 0 : 8), 24, main ? PAL.ink : '#fff'); if (!touchy) text(b.key, b.x, b.y + 17, 14, main ? PAL.ink : '#d8ccff'); }
-      text(net.err || (net.status === 'connecting' ? 'Connecting to the game server...' : 'Rooms: Patient Tag for two people on two devices. Combat Racing and Campaign are not built yet.'), W / 2, 668, 16, net.err ? '#ff9ab0' : '#d8ccff');
+      ctx.clearRect(-EX, -EY, W + 2 * EX, H + 2 * EY);
+      const touchy = touch.on || touch.coarse, br = MODE === 'br', L = TL(), R = TR(), K = KINDS[RIGS[ME]];
+      // The picture: the rig you picked, turning slowly on the road to the bridge, downtown behind it.
+      state.vehicles.forEach(v => { v.active = v.i === ME; if (v.active) { v.x = v.px = 0; v.z = v.pz = 100; v.h = v.ph = 2.4 + titleT * 0.45; v.vx = v.vz = 0; v.y = 0; v.pitch = 0; v.immune = 0; v.shield = 0; } });
+      state.it = (ME + 1) % NR; state.fly = 0; place(1);
+      cam.fov = 50; cam.updateProjectionMatrix(); cam.position.set(Math.sin(titleT * 0.2) * 1.5, 4.6, 82); cam.lookAt(0, 3.4, 100); render();
+      const box = (cx, cy, w, h, on, edge = true) => { panel(cx - w / 2, cy - h / 2, w, h, on ? 'rgba(255,225,74,0.97)' : 'rgba(20,12,48,0.86)'); if (edge) { ctx.strokeStyle = on ? '#fff' : 'rgba(255,255,255,0.55)'; ctx.lineWidth = 3; ctx.strokeRect(cx - w / 2, cy - h / 2, w, h); } };
+      // Left: the name, and the three ways to start.
+      text('CRASH OUT', L + 4, 92, 76, PAL.ink); text('CRASH OUT', L, 88, 76, PAL.it);
+      text(EDITION.toUpperCase(), L + 2, 156, 31, PAL.ink); text(EDITION.toUpperCase(), L, 154, 31, '#ff6ab0');
+      for (const k in TITLE_BTN) {
+        const t = TITLE_BTN[k], main = k === 'solo', cx = L + t.dx; box(cx, t.y, t.w, t.h, main);
+        text(t.label, cx, t.y - (main ? 14 : 12), t.size, main ? PAL.ink : '#fff'); text(touchy ? t.sub : `${t.sub}  [${t.key}]`, cx, t.y + (main ? 36 : 22), main ? 22 : 17, main ? PAL.ink : '#d8ccff');
+      }
+      // Right: the mode, the rig, the bots.
+      MODES.forEach(([m, label], i) => { const on = MODE === m; box(R + MODE_DX[i], MODE_Y, MODE_W, MODE_H, on); text(label, R + MODE_DX[i], MODE_Y + 1, 24, on ? PAL.ink : '#fff'); });
+      panel(R - TCOL / 2, 118, TCOL, 72); MODE_BLURB[MODE].forEach((t, i) => text(t, R, 140 + i * 28, 21, '#fff'));
+      RIGS.forEach((k, i) => { const on = i === ME, cx = R + RIG_DX[i]; box(cx, RIG_Y + RIG_H / 2, RIG_W, RIG_H, on); icon(k, cx, RIG_Y + 44, 20, false); text(RIG_SHORT[i], cx, RIG_Y + 90, 15, on ? PAL.ink : '#fff'); });
+      panel(R - TCOL / 2, INFO_Y, TCOL, INFO_H); text(`${K.label}  ·  ${K.name}`, R, INFO_Y + 27, 26, PAL.it); text('+ ' + K.good, R, INFO_Y + 63, 22, '#7dff5a'); text('- ' + K.bad, R, INFO_Y + 93, 22, '#ff9ab0');
+      box(R, BOTS_Y, TCOL, BOTS_H, false); text(`${tune.bots} BOTS`, R, BOTS_Y - 8, 32, '#ffe14a'); text(touchy ? 'rivals in the match' : 'rivals in the match  [B]', R, BOTS_Y + 24, 16, '#d8ccff');
+      [[-1, '-'], [1, '+']].forEach(([d, sign]) => { const cx = R + d * (TCOL / 2 - 46), dead = d < 0 ? tune.bots <= CONFIG.bots.min : tune.bots >= CONFIG.bots.max; box(cx, BOTS_Y, 76, 68, false); text(sign, cx, BOTS_Y - 2, 50, dead ? 'rgba(255,255,255,0.3)' : '#fff'); });
+      if (canFull()) { box(R, FULL_Y + FULL_H / 2, TCOL, FULL_H, false); text(touchy ? 'FULL SCREEN' : 'FULL SCREEN  [G]', R, FULL_Y + FULL_H / 2 + 1, 22, '#fff'); }
+      // Bottom: what went wrong, or the keys on a computer. A phone needs neither most of the time.
+      const note = net.err || (net.status === 'connecting' ? 'Connecting to the game server...' : touchy ? '' : 'Enter: play    T: mode    A / D: rig    B: bots    in a match: W A S D, Space to drift' + (br ? ', F to fire' : ''));
+      if (note) { ctx.font = `19px ${FONT}`; const w = Math.min(W + 2 * EX - 40, ctx.measureText(note).width + 40); panel(W / 2 - w / 2, 672, w, 36, 'rgba(20,12,48,0.9)'); text(note, W / 2, 691, 19, net.err ? '#ff9ab0' : '#d8ccff'); }
     },
   },
   play: {
