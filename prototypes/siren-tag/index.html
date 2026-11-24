@@ -1482,7 +1482,7 @@ function netOpen(first) {
   net.ws = ws;
   setTimeout(() => { if (!opened && net.ws === ws) { try { ws.close(); } catch (e) { /* already gone */ } if (net.ws === ws) ws.onclose(); } }, 6000);   // no answer in six seconds is no server
   ws.onopen = () => { opened = true; ws.send(JSON.stringify(first)); };
-  ws.onmessage = e => { let m; try { m = JSON.parse(e.data); } catch (x) { return; } netMsg(m); };
+  ws.onmessage = e => { let m; try { m = JSON.parse(e.data); } catch (x) { return; } net.quiet = 0; netMsg(m); };
   ws.onclose = () => {
     if (net.ws !== ws) return; net.ws = null;
     if (net.left) { net.status = 'off'; return; }
@@ -1583,6 +1583,9 @@ function netHousekeep() { // every step, in or out of a match: keep the line ali
   document.getElementById('roomcode').style.display = scene === 'join' ? 'block' : 'none';
   if (net.copied > 0) net.copied -= STEP;
   if (net.status === 'on') { net.pingT -= STEP; if (net.pingT <= 0) { net.pingT = 1; netSend({ t: 'ping' }); } }
+  // In a match the server speaks 20 times a second. Three seconds of nothing is a dead line that the
+  // browser has not noticed yet (a phone changing networks does this): drop it and get back in.
+  if (net.status === 'on' && NET && NET.client) { net.quiet = (net.quiet || 0) + STEP; if (net.quiet > 3) { const w = net.ws; net.ws = null; net.quiet = 0; net.status = 'lost'; net.retry = 0; try { if (w) w.close(); } catch (e) { /* already gone */ } } } else net.quiet = 0;
   if (net.status === 'lost') { net.retry -= STEP; if (net.retry <= 0) { net.retry = 1.5; if (!net.ws) netOpen({ t: 'join', room: net.code, token: netToken(net.code) }); } }
 }
 addEventListener('visibilitychange', () => { if (typeof document !== 'undefined' && document.visibilityState === 'visible' && net.code && !net.left) { if (!net.ws || net.ws.readyState > 1) { net.ws = null; net.status = 'lost'; net.retry = 0; } } });   // a phone waking up: get straight back in

@@ -26,7 +26,8 @@ export class RoomDO {
       this.run();
     });
     const gone = () => room.closed(conn, Date.now());
-    server.addEventListener('close', gone); server.addEventListener('error', gone);
+    server.addEventListener('close', () => { try { server.close(1000, 'bye'); } catch (e) { /* already closed */ } gone(); });   // answer the goodbye, or the browser waits on it and is slow to reconnect
+    server.addEventListener('error', gone);
     this.run();
     return new Response(null, { status: 101, webSocket: client });
   }

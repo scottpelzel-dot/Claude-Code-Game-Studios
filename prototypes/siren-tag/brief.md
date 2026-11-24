@@ -32,6 +32,9 @@ After play: "Why isn't full screen"
 After play: "It's fun!  Now level up the graphics and make a way to get health in battle royal"
 After play: "Game freezes when I try to make a room"
 After play: "i do want anyone to play this game eventually. so lets do a public if possible"
+After play: "what about supabase?"
+After play: "well my zombie game is hosted for free with better hosting i thought"
+After play: "This is info for zombie game.. Yes. The whole thing runs on Cloudflare: - **The game itself:** a Cloudflare Worker named `first-response-houston` serves the page, code, models and sounds. - **Leaderboard and play counts:** a Cloudflare D1 database called `frh-leaderboard`. - **Co-op rooms:** a Cloudflare Durable Object, which keeps the players in a shared street connected to each other. It's on the free `workers.dev` address rather than a domain of your own. Each deploy I do uploads a new version there under your Cloudflare account."
 
 **Pitch:** Vehicle tag between rival emergency crews: whoever is stuck with the town's most insufferable patient is "IT", and the only way to get rid of him is to ram him into someone else's vehicle. *(guessed: the patient as the tag)*
 
@@ -94,6 +97,7 @@ The bots are a real fight from round one: they drive at nearly full speed, aim a
 - [x] One shared round result: a person holding Mr. Crouch at the buzzer replays the round for everyone; each person sees their own time free of him
 - [x] Your own rig is predicted locally and corrected smoothly; other rigs ease towards the server's reports
 - [x] A dropped player's seat is held, braked, for 20 seconds, then driven by a bot until they return; the same link puts them back in their seat
+- [x] One room core (`room-core.mjs`) shared by the plain server and the Cloudflare Worker; a browser that hears nothing for three seconds in a match reconnects by itself
 - [x] Health crates in Battle Royale: white with a red cross, 40 health each, seven of them, back after 14 seconds; an arrow and a banner when you are low; bots fetch them when badly hurt
 - [x] A dusk graphics pass: lit windows and rooftop signs, lanterns on the palms with pools of light, zebra crossings, textured asphalt, drifting water, headlights and tail lights, tyre marks from drifts, stars, cloud bands, a haze round the sun, a lit bridge and a soft vignette
 - [x] Bot decisions: in Tag an IT bot predicts which bayou crossing you are taking and cuts you off at its exit when it can get there; in Battle Royale bots fetch ammo when dry, line up shots with a reaction delay and aiming error, give up a bad pursuit and fight one another
@@ -118,7 +122,7 @@ The bots are a real fight from round one: they drive at nearly full speed, aim a
 - No existing game's names, characters, map, art or collectibles
 
 ## Out of scope
-- Online play over the internet: set up for Render (`render.yaml`), one web service that serves the game and runs the rooms; it goes live when the owner connects the repository there. The free plan carries about two rooms at once
+- Online play over the internet: built for Cloudflare (`prototypes/siren-tag/cloudflare/`), a Worker that serves the game and one Durable Object per room running the same room code as `server.js`. Checked on Cloudflare's local runtime; it goes live when it is deployed to the owner's Cloudflare account, and an invite link counts as verified only after someone outside the host's network joins. `render.yaml` stays as a second route
 - Rooms for Battle Royale, and more than two people to a room: add it as a feature
 - Split-screen tag with a friend on one machine: change it after play
 - Combat Racing and Campaign, in that order (`design/crash-out-roadmap.md`): add it as a feature
