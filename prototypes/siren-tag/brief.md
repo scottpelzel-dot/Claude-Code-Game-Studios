@@ -37,6 +37,7 @@ After play: "well my zombie game is hosted for free with better hosting i though
 After play: "This is info for zombie game.. Yes. The whole thing runs on Cloudflare: - **The game itself:** a Cloudflare Worker named `first-response-houston` serves the page, code, models and sounds. - **Leaderboard and play counts:** a Cloudflare D1 database called `frh-leaderboard`. - **Co-op rooms:** a Cloudflare Durable Object, which keeps the players in a shared street connected to each other. It's on the free `workers.dev` address rather than a domain of your own. Each deploy I do uploads a new version there under your Cloudflare account."
 After play: "lets work on re doing the main screen"
 After play: "needs to be optimized for phones"
+After play: "I like game so far"
 
 **Pitch:** Vehicle tag between rival emergency crews: whoever is stuck with the town's most insufferable patient is "IT", and the only way to get rid of him is to ram him into someone else's vehicle. *(guessed: the patient as the tag)*
 
@@ -117,6 +118,7 @@ The bots are a real fight from round one: they drive at nearly full speed, aim a
 - emergency calls and the patient-stability meter · later *(guessed)*
 
 ## Keep
+- "I like game so far" *(you said)*, of the game with the phone-first main screen
 - "It's fun!" *(you said)*, of the game with Patient Tag, Battle Royale, the four rigs and the edge-to-edge view
 - The subtle differences between the rigs, and the handling as it is *(you said)* · pins: amb_top 26, amb_accel 21, fire_top 25, fire_accel 10, fire_turn 0.8, cop_top 29.5, cop_accel 17, hum_top 23.5, hum_accel 15, grip 9, drift_grip 1.5
 
